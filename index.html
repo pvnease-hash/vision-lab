@@ -114,6 +114,11 @@
         </select>
         <label for="voicePick"><small>Voice</small></label>
         <select id="voicePick"></select>
+        <label for="liveVoice"><small>Voice in Live mode</small></label>
+        <select id="liveVoice">
+          <option value="jarvis">JARVIS voice (your ElevenLabs voice, or the voice above)</option>
+          <option value="gemini">Gemini's own voice (fastest)</option>
+        </select>
         <input id="elKey" type="password" placeholder="ElevenLabs API key (optional, free tier)">
         <input id="elVoice" placeholder="ElevenLabs voice ID (your JARVIS voice)">
         <small id="miclog" style="display:block;white-space:pre-wrap;font-family:monospace;font-size:10px"></small>
@@ -152,7 +157,7 @@ const MODELS = {
 };
 const MODES = [
   ["objects", "Objects", "1"], ["faces", "Faces", "2"], ["hands", "Hands", "3"],
-  ["pose", "Body pose", "4"], ["mesh", "Face mesh", "5"], ["motion", "Motion", "M"],
+  ["pose", "Body pose", "4"], ["mesh", "Face mesh", "5"], ["expr", "Expressions", "6"], ["motion", "Motion", "M"],
 ];
 const $ = id => document.getElementById(id);
 const out = $("out"), ctx = out.getContext("2d");
@@ -327,7 +332,8 @@ async function ensure(key) {
     }
     if (key === "hands" && !models.hands) models.hands = await make(GestureRecognizer, MODELS.hands, { numHands: 2 });
     if (key === "pose")    models.pose    = await make(PoseLandmarker, MODELS.pose, { numPoses: 2 });
-    if (key === "mesh")    models.mesh    = await make(FaceLandmarker, MODELS.mesh, { numFaces: 2, outputFaceBlendshapes: true });
+    if ((key === "mesh" || key === "expr") && !models.mesh) models.mesh = await make(FaceLandmarker, MODELS.mesh, { numFaces: 2, outputFaceBlendshapes: true });
+    if (key === "expr") models.expr = models.mesh;
     if (key === "faces") {
       models.faces = await make(FaceDetector, MODELS.faces, { minDetectionConfidence: 0.6 });
       models.embed = await make(ImageEmbedder, MODELS.embed, { l2Normalize: true }, "IMAGE");
@@ -432,7 +438,7 @@ function runOneModel(t) {
   if (active.has("faces") && models.faces) jobs.push("faces");
   if ((active.has("hands") || active.has("objects")) && models.hands) jobs.push("hands");
   if (active.has("pose") && models.pose) jobs.push("pose");
-  if (active.has("mesh") && models.mesh) jobs.push("mesh");
+  if ((active.has("mesh") || active.has("expr")) && models.mesh) jobs.push("mesh");
   if (!jobs.length) return false;
   const job = jobs[turn++ % jobs.length];
   if (job === "objects") R.objects = models.objects.detectForVideo(video, t).detections;
@@ -470,6 +476,35 @@ function drawTracks(list, now, colorOf) {
     ctx.globalAlpha = it.a; const col = colorOf(it);
     box(it.x, it.y, it.w, it.h, col); label(it.text || it.label, it.x + it.w, it.y, col); ctx.globalAlpha = 1;
   }
+}
+// --- facial expressions from the 52 face "blendshape" muscle scores ---
+const EMO = { Happy: "😊", Surprised: "😮", Sad: "😢", Angry: "😠", Disgusted: "🤢", Neutral: "😐" };
+let emoSmooth = [];
+function emotionScores(bs) {
+  const g = n => bs.find(c => c.categoryName === n)?.score || 0, avg = (a, b) => (g(a) + g(b)) / 2;
+  return {
+    Happy: avg("mouthSmileLeft", "mouthSmileRight") * 1.2,
+    Surprised: (g("browInnerUp") * 0.4 + avg("browOuterUpLeft", "browOuterUpRight") * 0.4 + g("jawOpen") * 0.5 + avg("eyeWideLeft", "eyeWideRight") * 0.4),
+    Sad: avg("mouthFrownLeft", "mouthFrownRight") * 0.9 + g("browInnerUp") * 0.3 - avg("mouthSmileLeft", "mouthSmileRight") * 0.5,
+    Angry: avg("browDownLeft", "browDownRight") * 0.9 + avg("mouthPressLeft", "mouthPressRight") * 0.3,
+    Disgusted: avg("noseSneerLeft", "noseSneerRight") * 1.1 + g("mouthUpperUpLeft") * 0.2,
+    Neutral: 0.22,
+  };
+}
+function drawExpressions(now) {
+  const faces = R.mesh.faceLandmarks || [], shapes = R.mesh.faceBlendshapes || [];
+  const tags = [];
+  faces.forEach((lm, i) => {
+    const bs = shapes[i]?.categories; if (!bs) return;
+    const sc = emotionScores(bs), prev = emoSmooth[i] || sc;
+    for (const k in sc) sc[k] = prev[k] + (sc[k] - prev[k]) * 0.25;      // smooth so it doesn't flicker
+    emoSmooth[i] = sc;
+    const [name] = Object.entries(sc).sort((a, b) => b[1] - a[1])[0];
+    tags.push(name.toLowerCase());
+    let minX = 1, minY = 1, maxX = 0; for (const p of lm) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x; if (p.y < minY) minY = p.y; }
+    label(`${EMO[name]} ${name}`, maxX * W(), Math.max(22, minY * H() - 6), "#ffd166");
+  });
+  seen.expr = tags;
 }
 function drawResults() {
   const now = performance.now();
@@ -509,6 +544,7 @@ function drawResults() {
       if (lm[15].y < lm[0].y && lm[16].y < lm[0].y) { banner("🙌 BOTH HANDS UP!"); seen.pose = ["both hands raised"]; } else seen.pose = ["standing/sitting in view"];
     }
   }
+  if (active.has("expr") && R.mesh) drawExpressions(now);
   if (active.has("mesh") && R.mesh) {
     for (const lm of R.mesh.faceLandmarks) {
       draw.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "#c0c0c070", lineWidth: 1 });
@@ -547,7 +583,7 @@ function loop() {
 }
 
 // ---------- JARVIS brain ----------
-for (const id of ["apikey", "geminiKey", "groqKey", "elKey", "elVoice", "brain", "voicePick", "recMode"]) {
+for (const id of ["apikey", "geminiKey", "groqKey", "elKey", "elVoice", "brain", "voicePick", "recMode", "liveVoice"]) {
   const v = store.get(id, null); if (v !== null && id !== "voicePick") $(id).value = v;
   $(id).onchange = () => store.set(id, $(id).value.trim());
 }
@@ -561,7 +597,7 @@ function sceneText() {
   if (active.has("faces")) parts.push("Faces: " + (seen.faces.length ? seen.faces.join(", ") : "none"));
   if (active.has("hands")) parts.push("Hand gestures: " + (seen.gestures.length ? seen.gestures.join(", ") : "no hands visible"));
   if (active.has("pose") && seen.pose.length) parts.push("Body: " + seen.pose.join(", "));
-  if (active.has("mesh") && seen.expr.length) parts.push("Expression: " + seen.expr.join(", "));
+  if ((active.has("mesh") || active.has("expr")) && seen.expr.length) parts.push("Facial expression: " + seen.expr.join(", "));
   if (active.has("motion")) parts.push("Motion: " + (seen.motion ? "yes" : "no"));
   return parts.join(". ") || "No detectors are switched on.";
 }
@@ -864,6 +900,7 @@ async function whisperListen(s0) {
 }
 
 $("talk").onclick = () => {
+  if (typeof liveOn !== "undefined" && liveOn) { stopJarvisVoice(); stopPlayback(); setOrb("listening", "Go ahead…"); return; }   // Live: tap = interrupt
   player.src = SILENT; player.play().catch(() => {}); hookAnalyser();   // unlock audio on iPhone
   if (speaking) { speechSynthesis?.cancel(); player.pause(); sayDone(); }   // tap to interrupt JARVIS
   if (sess?.mode === "ask" || sess?.mode === "dictate") { log("tap: stop"); stopListening(); return; }
@@ -907,7 +944,50 @@ function liveUI(on, msg) {
   if (msg !== undefined) $("liveNote").textContent = msg;
 }
 function stopPlayback() { for (const s of liveSources) { try { s.stop(); } catch {} } liveSources = []; liveNext = 0; }
+// --- JARVIS voice in Live: Gemini thinks, your voice speaks (sentence by sentence) ---
+const useJarvisVoice = () => $("liveVoice").value === "jarvis";
+let speakQ = [], liveTTS = false, liveSpeakBuf = "", ttsGen = 0;
+function queueSentences(flush) {
+  const parts = liveSpeakBuf.match(/[^.!?]+[.!?]+["')\]]?\s*/g) || [];
+  let used = parts.join("");
+  if (flush) { const rest = liveSpeakBuf.slice(used.length).trim(); if (rest) parts.push(rest); used = liveSpeakBuf; }
+  liveSpeakBuf = liveSpeakBuf.slice(used.length);
+  for (const p of parts) if (p.trim()) speakQ.push(p.trim());
+  speakNext();
+}
+function stopJarvisVoice() { ttsGen++; speakQ = []; liveSpeakBuf = ""; speechSynthesis?.cancel(); try { player.pause(); } catch {} liveTTS = false; }
+async function speakNext() {
+  if (liveTTS || !speakQ.length) return;
+  const text = speakQ.shift(), gen = ttsGen; liveTTS = true; setOrb("speaking");
+  try { await ttsOne(text); } catch {}
+  if (gen !== ttsGen) return;
+  liveTTS = false;
+  if (speakQ.length) speakNext(); else if (liveOn) setOrb("listening");
+}
+function ttsOne(text) {
+  return new Promise(async done => {
+    const elKey = $("elKey").value.trim(), elVoice = $("elVoice").value.trim();
+    if (elKey && elVoice) {
+      try {
+        const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(elVoice)}?output_format=mp3_44100_128&optimize_streaming_latency=3`, {
+          method: "POST", headers: { "xi-api-key": elKey, "content-type": "application/json" },
+          body: JSON.stringify({ text, model_id: "eleven_flash_v2_5" }) });
+        if (!r.ok) throw new Error((await r.text()).slice(0, 120));
+        player.src = URL.createObjectURL(await r.blob());
+        const tick = setInterval(() => { orbKick = 0.6 + Math.random() * 0.4; }, 120);
+        player.onended = player.onerror = () => { clearInterval(tick); done(); };
+        await player.play(); return;
+      } catch (e) { log("ElevenLabs: " + e.message); }
+    }
+    const u = new SpeechSynthesisUtterance(text), v = speechSynthesis.getVoices().find(v => v.name === $("voicePick").value);
+    if (v) { u.voice = v; u.lang = v.lang; }
+    const safety = setTimeout(done, 2500 + text.split(/\s+/).length * 450);
+    u.onend = u.onerror = () => { clearTimeout(safety); done(); }; u.onboundary = () => { orbKick = 1; };
+    lastUtter = u; speechSynthesis.speak(u);
+  });
+}
 function playPcm(b64data, rate) {
+  if (useJarvisVoice()) return;                     // Gemini's own audio is muted; JARVIS voice speaks the transcript
   const bin = atob(b64data), n = bin.length >> 1, f = new Float32Array(n);
   for (let i = 0; i < n; i++) { let v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8); if (v & 0x8000) v -= 0x10000; f[i] = v / 32768; }
   const buf = liveOut.createBuffer(1, n, rate); buf.copyToChannel(f, 0);
@@ -921,7 +1001,7 @@ async function liveStartMic() {
   liveIn = new (window.AudioContext || window.webkitAudioContext)(); await liveIn.resume();
   const src = liveIn.createMediaStreamSource(liveMic), proc = liveIn.createScriptProcessor(4096, 1, 1), ratio = liveIn.sampleRate / 16000;
   proc.onaudioprocess = e => {
-    if (!liveReady) return;
+    if (!liveReady || liveTTS) return;
     const x = e.inputBuffer.getChannelData(0), n = Math.floor(x.length / ratio), pcm = new Int16Array(n); let peak = 0;
     for (let i = 0; i < n; i++) { const a = Math.floor(i * ratio), bEnd = Math.min(x.length, Math.floor((i + 1) * ratio)); let sum = 0;
       for (let j = a; j < bEnd; j++) sum += x[j]; const v = sum / Math.max(1, bEnd - a); peak = Math.max(peak, Math.abs(v));
@@ -947,14 +1027,15 @@ function liveConnect() {
     let m; try { m = JSON.parse(typeof ev.data === "string" ? ev.data : new TextDecoder().decode(ev.data)); } catch { return; }
     if (m.setupComplete) { liveReady = true; liveRetry = 0; liveUI(true, "Live. Just talk; interrupt him any time. JARVIS can see your camera."); setOrb("listening", "I'm here, sir."); log("live: ready"); liveSendFrame(); return; }
     const sc = m.serverContent; if (!sc) return;
-    if (sc.interrupted) { stopPlayback(); setOrb("listening"); }
+    if (sc.interrupted) { stopPlayback(); stopJarvisVoice(); setOrb("listening"); }
     if (sc.inputTranscription?.text) { if (!liveUserBubble) liveUserBubble = addChat("me", ""); liveUserBubble.textContent += sc.inputTranscription.text; setOrb(orbState, liveUserBubble.textContent); }
-    if (sc.outputTranscription?.text) { liveUserBubble = null; if (!liveAiBubble) liveAiBubble = addChat("ai", ""); liveAiBubble.textContent += sc.outputTranscription.text; setOrb(orbState, liveAiBubble.textContent); }
+    if (sc.outputTranscription?.text) { liveUserBubble = null; if (!liveAiBubble) liveAiBubble = addChat("ai", ""); liveAiBubble.textContent += sc.outputTranscription.text; setOrb(orbState, liveAiBubble.textContent);
+      if (useJarvisVoice()) { liveSpeakBuf += sc.outputTranscription.text; queueSentences(false); } }
     for (const p of sc.modelTurn?.parts || []) {
       const d = p.inlineData || p.inline_data;
       if (d?.data && /audio/.test(d.mimeType || d.mime_type || "audio")) playPcm(d.data, +((d.mimeType || "").match(/rate=(\d+)/)?.[1] || 24000));
     }
-    if (sc.turnComplete) { liveAiBubble = null; liveUserBubble = null; }
+    if (sc.turnComplete) { liveAiBubble = null; liveUserBubble = null; if (useJarvisVoice()) queueSentences(true); }
   };
   ws.onclose = ev => {
     log(`live: closed ${ev.code} ${ev.reason.slice(0, 80)}`);
@@ -981,7 +1062,7 @@ async function liveStart() {
   try {
     liveOut = new (window.AudioContext || window.webkitAudioContext)(); await liveOut.resume();
     liveAnalyser = liveOut.createAnalyser(); liveAnalyser.fftSize = 256; liveAnalyser.connect(liveOut.destination);
-    analyser = liveAnalyser;                                            // orb follows JARVIS's real voice
+    analyser = useJarvisVoice() ? null : liveAnalyser;                  // orb follows Gemini's real voice
     await liveStartMic();
   } catch (e) { liveStop(); liveUI(false, "Microphone problem: " + e.message); return; }
   liveConnect();
@@ -989,6 +1070,7 @@ async function liveStart() {
   store.set("liveAuto", true);
 }
 function liveStop() {
+  stopJarvisVoice();
   liveOn = false; liveReady = false; clearInterval(liveVideoTimer);
   try { ws?.close(); } catch {} ws = null; stopPlayback();
   liveMic?.getTracks().forEach(t => t.stop()); liveMic = null;
@@ -997,6 +1079,7 @@ function liveStop() {
   setOrb("idle", "");
 }
 $("geminiKey").addEventListener("change", () => { if ($("geminiKey").value.trim() && !liveOn) liveStart(); });
+$("liveVoice").addEventListener("change", () => { stopJarvisVoice(); stopPlayback(); if (liveOn) analyser = useJarvisVoice() ? null : liveAnalyser; });
 $("live").onclick = () => { if (liveOn) { liveStop(); store.set("liveAuto", false); } else liveStart(); };
 
 // ---------- faces ----------
