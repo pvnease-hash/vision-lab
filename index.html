@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Vision Lab">
+<meta name="theme-color" content="#0b0f14">
+<title>Vision Lab</title>
+<style>
+  :root { --bg:#0b0f14; --panel:#141b24; --text:#e6edf3; --muted:#8b98a5; --accent:#2fd4ff; --on:#1f6feb; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  header { padding:12px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; letter-spacing:.5px; }
+  h1 span { color:var(--accent); }
+  #status { color:var(--muted); font-size:13px; }
+  main { display:flex; gap:16px; padding:0 16px 16px; flex-wrap:wrap; }
+  #stage { position:relative; flex:1 1 640px; max-width:960px; }
+  canvas { width:100%; border-radius:10px; background:#000; display:block; }
+  aside { flex:0 1 300px; display:flex; flex-direction:column; gap:12px; }
+  .card { background:var(--panel); border-radius:10px; padding:12px; }
+  .card h2 { font-size:12px; text-transform:uppercase; color:var(--muted); margin:0 0 8px; letter-spacing:1px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  button { background:#222c38; color:var(--text); border:1px solid #2c3846; border-radius:8px; padding:8px; font:inherit; cursor:pointer; text-align:left; }
+  button.on { background:var(--on); border-color:var(--on); }
+  button kbd { float:right; color:var(--muted); font-size:11px; }
+  button.on kbd { color:#cfe3ff; }
+  input { width:100%; background:#0b0f14; color:var(--text); border:1px solid #2c3846; border-radius:8px; padding:8px; font:inherit; }
+  #answer { white-space:pre-wrap; min-height:40px; color:#cfe8d0; }
+  #big { display:none; position:absolute; inset:0; align-items:center; justify-content:center; text-align:center; padding:24px; }
+  #big button { text-align:center; font-size:18px; padding:14px 24px; background:var(--on); }
+  small { color:var(--muted); }
+  @media (pointer:coarse) { button { min-height:44px; } button kbd { display:none; } input { font-size:16px; } }
+  @media (max-width:700px) { header { padding:10px 12px; } main { padding:0 12px 16px; } aside { flex:1 1 100%; } #stage { flex:1 1 100%; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>VISION <span>LAB</span></h1>
+  <div id="status">Click “Start camera”.</div>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="out" width="960" height="540"></canvas>
+    <div id="big"><div><button id="start">▶ Start camera</button><p><small>Your browser will ask to use the camera. Click Allow.</small></p></div></div>
+  </div>
+  <aside>
+    <div class="card">
+      <h2>Vision modes (mix &amp; match)</h2>
+      <div class="grid" id="modes"></div>
+    </div>
+    <div class="card">
+      <h2>Faces</h2>
+      <input id="faceName" placeholder="Your name">
+      <div class="grid" style="margin-top:6px">
+        <button id="register">Register face <kbd>R</kbd></button>
+        <button id="forget">Forget all</button>
+      </div>
+      <small id="known"></small>
+    </div>
+    <div class="card">
+      <h2>Ask Claude about the scene</h2>
+      <input id="question" placeholder="e.g. What am I holding?">
+      <div class="grid" style="margin-top:6px">
+        <button id="ask">Ask <kbd>Enter</kbd></button>
+        <button id="describe">Describe <kbd>C</kbd></button>
+      </div>
+      <p id="answer"></p>
+      <input id="apikey" type="password" placeholder="Claude API key (sk-ant-…), optional">
+      <small>Only needed for this box. Saved in this browser only. Billed separately from Claude Pro.</small>
+    </div>
+    <div class="card grid">
+      <button id="voice" class="on">Voice <kbd>V</kbd></button>
+      <button id="snap">Snapshot <kbd>S</kbd></button>
+      <button id="flip">Flip camera</button>
+    </div>
+  </aside>
+</main>
+
+<script type="module">
+import { FilesetResolver, ObjectDetector, GestureRecognizer, PoseLandmarker, FaceLandmarker,
+         FaceDetector, ImageEmbedder, DrawingUtils }
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const M = "https://storage.googleapis.com/mediapipe-models/";
+const MODELS = {
+  objects: M + "object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
+  hands:   M + "gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
+  pose:    M + "pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  mesh:    M + "face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+  faces:   M + "face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+  embed:   M + "image_embedder/mobilenet_v3_small/float32/1/mobilenet_v3_small.tflite",
+};
+const MODES = [
+  ["objects", "Objects", "1"], ["faces", "Faces", "2"], ["hands", "Hands", "3"],
+  ["pose", "Body pose", "4"], ["mesh", "Face mesh", "5"], ["motion", "Motion", "M"],
+];
+const $ = id => document.getElementById(id);
+const out = $("out"), ctx = out.getContext("2d");
+const video = document.createElement("video");
+video.playsInline = true; video.muted = true; video.setAttribute("playsinline", "");
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+
+let active = new Set(store.get("modes", ["objects", "hands"]));
+let vision, models = {}, loading = {}, voiceOn = true;
+let known = store.get("faces", {});              // name -> [embedding arrays]
+let seen = { objects: [], faces: [], gestures: [] };
+let draw, facing = "user", mirror = true, started = false;
+
+// ---------- UI ----------
+function setStatus(t) { $("status").textContent = t; }
+function renderModes() {
+  $("modes").innerHTML = "";
+  for (const [key, name, k] of MODES) {
+    const b = document.createElement("button");
+    b.innerHTML = `${name} <kbd>${k}</kbd>`;
+    b.className = active.has(key) ? "on" : "";
+    b.onclick = () => toggle(key);
+    $("modes").appendChild(b);
+  }
+}
+function toggle(key) {
+  active.has(key) ? active.delete(key) : active.add(key);
+  store.set("modes", [...active]); renderModes(); ensure(key);
+}
+function renderKnown() {
+  const names = Object.keys(known);
+  $("known").textContent = names.length ? "Known: " + names.map(n => `${n} (${known[n].length})`).join(", ")
+                                        : "No faces registered yet. Register 3–5 times from different angles.";
+}
+function say(text) {
+  if (!voiceOn || !window.speechSynthesis) return;
+  const u = new SpeechSynthesisUtterance(text);
+  const v = speechSynthesis.getVoices().find(v => /Daniel|en-GB/.test(v.name + v.lang));
+  if (v) u.voice = v;
+  speechSynthesis.speak(u);
+}
+
+// ---------- model loading (only what you turn on) ----------
+async function make(cls, path, extra = {}, mode = "VIDEO") {
+  for (const delegate of ["GPU", "CPU"]) {
+    try { return await cls.createFromOptions(vision, { baseOptions: { modelAssetPath: path, delegate }, runningMode: mode, ...extra }); }
+    catch (e) { if (delegate === "CPU") throw e; }
+  }
+}
+async function ensure(key) {
+  if (key === "motion" || models[key] || loading[key]) return;
+  loading[key] = true; setStatus(`Loading ${key} model…`);
+  try {
+    if (key === "objects") models.objects = await make(ObjectDetector, MODELS.objects, { scoreThreshold: 0.45, maxResults: 10 });
+    if (key === "hands")   models.hands   = await make(GestureRecognizer, MODELS.hands, { numHands: 2 });
+    if (key === "pose")    models.pose    = await make(PoseLandmarker, MODELS.pose, { numPoses: 2 });
+    if (key === "mesh")    models.mesh    = await make(FaceLandmarker, MODELS.mesh, { numFaces: 2, outputFaceBlendshapes: true });
+    if (key === "faces") {
+      models.faces = await make(FaceDetector, MODELS.faces, { minDetectionConfidence: 0.6 });
+      models.embed = await make(ImageEmbedder, MODELS.embed, { l2Normalize: true }, "IMAGE");
+    }
+    setStatus("Running. Turn modes on and off with the buttons.");
+  } catch (e) { setStatus(`Couldn't load ${key}: ${e.message}`); }
+  loading[key] = false;
+}
+
+// ---------- drawing helpers (video is mirrored, text is not) ----------
+const W = () => out.width, H = () => out.height;
+function label(text, x, y, color = "#2fd4ff") {    // x,y in un-mirrored video coords
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.font = "bold 15px -apple-system,sans-serif";
+  const mx = mirror ? W() - x : x, w = ctx.measureText(text).width + 10;
+  const lx = Math.min(Math.max(mx - w, 0), W() - w), ly = Math.max(y, 20);
+  ctx.fillStyle = color; ctx.fillRect(lx, ly - 20, w, 22);
+  ctx.fillStyle = "#000"; ctx.fillText(text, lx + 5, ly - 4); ctx.restore();
+}
+function box(x, y, w, h, color) { ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.strokeRect(x, y, w, h); }
+function banner(text, color = "#ffd166") { ctx.save(); ctx.setTransform(1,0,0,1,0,0);
+  ctx.font = "bold 22px -apple-system,sans-serif"; ctx.fillStyle = color; ctx.fillText(text, 16, H() - 20); ctx.restore(); }
+
+// ---------- face recognition ----------
+const crop = document.createElement("canvas");
+function faceEmbedding(bb) {
+  const pad = 0.15, x = Math.max(0, bb.originX - bb.width * pad), y = Math.max(0, bb.originY - bb.height * pad);
+  const w = Math.min(video.videoWidth - x, bb.width * (1 + 2 * pad)), h = Math.min(video.videoHeight - y, bb.height * (1 + 2 * pad));
+  crop.width = 160; crop.height = 160;
+  crop.getContext("2d").drawImage(video, x, y, w, h, 0, 0, 160, 160);
+  return Array.from(models.embed.embed(crop).embeddings[0].floatEmbedding);
+}
+const cos = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
+function whoIs(emb) {
+  let best = "Unknown", score = 0;
+  for (const [n, list] of Object.entries(known)) for (const e of list) { const s = cos(emb, e); if (s > score) { score = s; best = n; } }
+  return score > 0.82 ? [best, score] : ["Unknown", score];
+}
+let faceCache = [], frameNo = 0, greeted = {};
+
+// ---------- motion ----------
+const small = document.createElement("canvas"); small.width = 160; small.height = 90;
+const sctx = small.getContext("2d", { willReadFrequently: true }); let prev = null;
+function motion() {
+  sctx.drawImage(video, 0, 0, 160, 90);
+  const d = sctx.getImageData(0, 0, 160, 90).data; let changed = 0, minX = 160, minY = 90, maxX = 0, maxY = 0;
+  if (prev) for (let i = 0; i < d.length; i += 4) {
+    if (Math.abs(d[i] - prev[i]) + Math.abs(d[i+1] - prev[i+1]) + Math.abs(d[i+2] - prev[i+2]) > 80) {
+      changed++; const p = i / 4, x = p % 160, y = (p / 160) | 0;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+  }
+  prev = d;
+  if (changed > 150) { const sx = W() / 160, sy = H() / 90;
+    box(minX * sx, minY * sy, (maxX - minX) * sx, (maxY - minY) * sy, "#ff4d4d"); label("MOTION", W() - 10, 30, "#ff4d4d"); }
+}
+
+// ---------- main loop ----------
+let last = performance.now(), fps = 0;
+function loop() {
+  if (video.readyState >= 2) {
+    if (out.width !== video.videoWidth) { out.width = video.videoWidth; out.height = video.videoHeight; }
+    mirror ? ctx.setTransform(-1, 0, 0, 1, W(), 0) : ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(video, 0, 0, W(), H());
+    const t = performance.now(); frameNo++;
+
+    if (active.has("objects") && models.objects) {
+      seen.objects = [];
+      for (const d of models.objects.detectForVideo(video, t).detections) {
+        const c = d.categories[0], b = d.boundingBox; seen.objects.push(c.categoryName);
+        box(b.originX, b.originY, b.width, b.height, "#ffb000");
+        label(`${c.categoryName} ${Math.round(c.score * 100)}%`, b.originX + b.width, b.originY, "#ffb000");
+      }
+    }
+    if (active.has("faces") && models.faces) {
+      const dets = models.faces.detectForVideo(video, t).detections;
+      if (frameNo % 8 === 0 || faceCache.length !== dets.length)
+        faceCache = dets.map(d => Object.keys(known).length ? whoIs(faceEmbedding(d.boundingBox)) : ["Face", 0]);
+      seen.faces = faceCache.map(f => f[0]);
+      dets.forEach((d, i) => {
+        const b = d.boundingBox, [name, s] = faceCache[i] || ["Face", 0];
+        const col = name === "Unknown" ? "#ff8c42" : "#3ddc84";
+        box(b.originX, b.originY, b.width, b.height, col);
+        label(s ? `${name} ${s.toFixed(2)}` : name, b.originX + b.width, b.originY, col);
+        if (!["Unknown", "Face"].includes(name) && Date.now() - (greeted[name] || 0) > 120000) { greeted[name] = Date.now(); say(`Hello, ${name}`); }
+      });
+    }
+    if (active.has("hands") && models.hands) {
+      const r = models.hands.recognizeForVideo(video, t); seen.gestures = [];
+      r.landmarks.forEach((lm, i) => {
+        draw.drawConnectors(lm, GestureRecognizer.HAND_CONNECTIONS, { color: "#ff4fd8", lineWidth: 4 });
+        draw.drawLandmarks(lm, { color: "#fff", radius: 3 });
+        const g = r.gestures[i]?.[0], side = r.handedness[i]?.[0]?.categoryName === "Left" ? "Right" : "Left";
+        const nice = { Closed_Fist: "Fist", Open_Palm: "Open hand", Pointing_Up: "Pointing up", Thumb_Down: "Thumbs down",
+                       Thumb_Up: "Thumbs up", Victory: "Peace", ILoveYou: "I love you", None: "Hand" }[g?.categoryName] || "Hand";
+        seen.gestures.push(nice);
+        label(`${side}: ${nice}`, lm[0].x * W() + 40, lm[0].y * H() + 40, "#ff4fd8");
+      });
+    }
+    if (active.has("pose") && models.pose) {
+      const r = models.pose.detectForVideo(video, t);
+      for (const lm of r.landmarks) {
+        draw.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#00e5a0", lineWidth: 4 });
+        draw.drawLandmarks(lm, { color: "#fff", radius: 3 });
+        if (lm[15].y < lm[0].y && lm[16].y < lm[0].y) banner("🙌 BOTH HANDS UP!");
+      }
+    }
+    if (active.has("mesh") && models.mesh) {
+      const r = models.mesh.detectForVideo(video, t);
+      for (const lm of r.faceLandmarks) {
+        draw.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "#c0c0c070", lineWidth: 1 });
+        draw.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS, { color: "#2fd4ff", lineWidth: 2 });
+        draw.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS, { color: "#2fd4ff", lineWidth: 2 });
+      }
+      const bs = r.faceBlendshapes?.[0]?.categories;
+      if (bs) { const g = n => bs.find(c => c.categoryName === n)?.score || 0; const tags = [];
+        if (g("jawOpen") > 0.4) tags.push("Mouth open"); if ((g("mouthSmileLeft") + g("mouthSmileRight")) / 2 > 0.5) tags.push("Smiling");
+        if (g("eyeBlinkLeft") > 0.5 && g("eyeBlinkRight") > 0.5) tags.push("Eyes closed"); if (g("browInnerUp") > 0.5) tags.push("Eyebrows up");
+        if (tags.length) banner(tags.join(" · "), "#2fd4ff"); }
+    }
+    if (active.has("motion")) motion();
+
+    fps = 0.9 * fps + 0.1 * (1000 / (t - last)); last = t;
+    ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.font = "12px monospace"; ctx.fillStyle = "#fff";
+    ctx.fillText(`${fps.toFixed(1)} fps`, 10, 18); ctx.restore();
+  }
+  requestAnimationFrame(loop);
+}
+
+// ---------- Claude ----------
+$("apikey").value = store.get("apikey", "");
+$("apikey").onchange = () => store.set("apikey", $("apikey").value.trim());
+async function askClaude(q) {
+  const key = $("apikey").value.trim();
+  if (!key) { $("answer").textContent = "Paste a Claude API key below first (console.anthropic.com → API Keys)."; return; }
+  $("answer").textContent = "Looking…";
+  const c = document.createElement("canvas"); c.width = 960; c.height = Math.round(960 * video.videoHeight / video.videoWidth);
+  c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
+  const img = c.toDataURL("image/jpeg", 0.8).split(",")[1];
+  const ctxText = [...seen.objects, ...seen.faces, ...seen.gestures].join(", ");
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01",
+                 "anthropic-dangerous-direct-browser-access": "true" },
+      body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 300,
+        system: "You are JARVIS, a witty AI assistant looking through a webcam. Answer in 1-3 short spoken sentences, no markdown.",
+        messages: [{ role: "user", content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: img } },
+          { type: "text", text: q + (ctxText ? `\n(Local detectors see: ${ctxText})` : "") } ] }] }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error?.message || r.status);
+    const a = j.content[0].text.trim(); $("answer").textContent = a; say(a);
+  } catch (e) { $("answer").textContent = "Claude error: " + e.message; }
+}
+$("ask").onclick = () => $("question").value.trim() && askClaude($("question").value.trim());
+$("question").onkeydown = e => { if (e.key === "Enter") $("ask").click(); };
+$("describe").onclick = () => askClaude("What do you see? Describe it briefly.");
+
+// ---------- faces ----------
+async function register() {
+  const name = $("faceName").value.trim();
+  if (!name) { $("faceName").focus(); setStatus("Type your name first, then Register."); return; }
+  if (!active.has("faces")) toggle("faces");
+  await ensure("faces"); if (!models.faces) return;
+  const dets = models.faces.detectForVideo(video, performance.now()).detections;
+  if (!dets.length) { setStatus("No face found. Look at the camera and try again."); return; }
+  const big = dets.reduce((a, b) => a.boundingBox.width > b.boundingBox.width ? a : b);
+  (known[name] ||= []).push(faceEmbedding(big.boundingBox)); store.set("faces", known); renderKnown();
+  faceCache = []; setStatus(`Saved ${name}. Turn your head a little and register again for better accuracy.`);
+}
+$("register").onclick = register;
+$("forget").onclick = () => { known = {}; store.set("faces", known); renderKnown(); faceCache = []; };
+
+// ---------- misc ----------
+$("voice").onclick = () => { voiceOn = !voiceOn; $("voice").classList.toggle("on", voiceOn); if (!voiceOn) speechSynthesis.cancel(); };
+$("snap").onclick = () => { const a = document.createElement("a"); a.download = `vision-${Date.now()}.png`; a.href = out.toDataURL(); a.click(); };
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  const m = MODES.find(m => m[2].toLowerCase() === e.key.toLowerCase());
+  if (m) toggle(m[0]);
+  else if (e.key === "r") register(); else if (e.key === "c") $("describe").click();
+  else if (e.key === "v") $("voice").click(); else if (e.key === "s") $("snap").click();
+});
+
+// ---------- start ----------
+$("big").style.display = "flex";
+async function openCamera() {
+  if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+  video.srcObject = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: facing, width: { ideal: 960 }, height: { ideal: 540 } }, audio: false });
+  await video.play();
+  mirror = facing === "user"; prev = null; faceCache = [];
+}
+$("flip").onclick = async () => {
+  if (!started) return;
+  facing = facing === "user" ? "environment" : "user";
+  try { await openCamera(); } catch (e) { setStatus("Couldn't switch camera: " + e.message); }
+};
+$("start").onclick = async () => {
+  if (!navigator.mediaDevices?.getUserMedia) { setStatus("This browser can't use the camera here. Open the page from its https link in Safari or Chrome."); return; }
+  try { await openCamera(); }
+  catch (e) { setStatus("Camera blocked: " + e.message + ". Allow camera access for this page and reload."); return; }
+  $("big").style.display = "none"; setStatus("Loading AI engine…"); started = true;
+  if (window.speechSynthesis) speechSynthesis.speak(new SpeechSynthesisUtterance(""));   // unlock voice on iPhone
+  vision = await FilesetResolver.forVisionTasks(WASM);
+  draw = new DrawingUtils(ctx);
+  for (const k of active) await ensure(k);
+  setStatus("Running. Turn modes on and off with the buttons.");
+  loop();
+};
+renderModes(); renderKnown();
+</script>
+</body>
+</html>
