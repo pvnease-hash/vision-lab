@@ -888,7 +888,7 @@ $("recMode").addEventListener("change", () => { browserBroken = false; if (sess)
 // ---------- GEMINI LIVE: real-time voice + vision conversation ----------
 let liveOn = false, ws = null, liveMic = null, liveIn = null, liveOut = null, liveAnalyser = null, liveNext = 0, liveSources = [];
 let liveVideoTimer = null, liveUserBubble = null, liveAiBubble = null, liveModelIdx = 0, liveShape = 0, liveReady = false, liveRetry = 0;
-const LIVE_MODELS = ["models/gemini-3.8-live", "models/gemini-live-2.5-flash-preview", "models/gemini-2.0-flash-live-001"];
+const LIVE_MODELS = ["models/gemini-3.8-live", "models/gemini-3.1-flash-live-preview", "models/gemini-2.5-flash-native-audio-latest"];
 const LIVE_SYSTEM = SYSTEM.replace("Your words are spoken aloud", "You are in a live voice call with him and can see his camera feed continuously. Speak with a refined British accent, like a butler-meets-genius AI. Your words are spoken aloud") +
   " If he asks what you see, look at the latest camera frame. Keep it snappy; he can interrupt you any time.";
 const b64 = buf => { let s = "", u = new Uint8Array(buf); for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
@@ -898,8 +898,8 @@ function liveSetup() {
   const voice = { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Charon" } } } };
   const common = { model, systemInstruction: { parts: [{ text: LIVE_SYSTEM }] }, inputAudioTranscription: {}, outputAudioTranscription: {} };
   return liveShape === 0
-    ? { setup: { ...common, responseModalities: ["AUDIO"], ...voice } }
-    : { setup: { ...common, generationConfig: { responseModalities: ["AUDIO"], ...voice } } };
+    ? { setup: { ...common, generationConfig: { responseModalities: ["AUDIO"], ...voice } } }
+    : { setup: { ...common, responseModalities: ["AUDIO"], ...voice } };
 }
 function liveUI(on, msg) {
   $("live").classList.toggle("on", on);
@@ -941,9 +941,10 @@ function liveConnect() {
   const key = $("geminiKey").value.trim();
   liveReady = false;
   ws = new WebSocket("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=" + encodeURIComponent(key));
+  ws.binaryType = "arraybuffer";          // Blob reads can fail in some Chrome setups; decode bytes directly
   ws.onopen = () => { log("live: connecting " + LIVE_MODELS[liveModelIdx]); liveSend(liveSetup()); };
   ws.onmessage = async ev => {
-    const m = JSON.parse(typeof ev.data === "string" ? ev.data : await ev.data.text());
+    let m; try { m = JSON.parse(typeof ev.data === "string" ? ev.data : new TextDecoder().decode(ev.data)); } catch { return; }
     if (m.setupComplete) { liveReady = true; liveRetry = 0; liveUI(true, "Live. Just talk; interrupt him any time. JARVIS can see your camera."); setOrb("listening", "I'm here, sir."); log("live: ready"); liveSendFrame(); return; }
     const sc = m.serverContent; if (!sc) return;
     if (sc.interrupted) { stopPlayback(); setOrb("listening"); }
