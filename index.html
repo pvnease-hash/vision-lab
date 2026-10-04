@@ -945,7 +945,24 @@ function liveUI(on, msg) {
 }
 function stopPlayback() { for (const s of liveSources) { try { s.stop(); } catch {} } liveSources = []; liveNext = 0; }
 // --- JARVIS voice in Live: Gemini thinks, your voice speaks (sentence by sentence) ---
-const useJarvisVoice = () => $("liveVoice").value === "jarvis";
+const IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+// iPhone: speech-synthesis gets muted/whispered while the mic is live, so use Gemini's voice there unless an ElevenLabs voice is set
+const useJarvisVoice = () => $("liveVoice").value === "jarvis" && !(IOS && !($("elKey").value.trim() && $("elVoice").value.trim()));
+let wakeLock = null;
+async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {} }
+document.addEventListener("visibilitychange", () => { if (liveOn && document.visibilityState === "visible") keepAwake(); });
+// Must run synchronously inside a tap: iPhone only lets sound start from a direct touch.
+function unlockAudio() {
+  try { if (navigator.audioSession) navigator.audioSession.type = "play-and-record"; } catch {}
+  if (!liveOut || liveOut.state === "closed") {
+    liveOut = new (window.AudioContext || window.webkitAudioContext)();
+    liveAnalyser = liveOut.createAnalyser(); liveAnalyser.fftSize = 256; liveAnalyser.connect(liveOut.destination);
+  }
+  liveOut.resume();
+  const b = liveOut.createBuffer(1, 1, 22050), src = liveOut.createBufferSource(); src.buffer = b; src.connect(liveOut.destination); src.start(0);
+  try { player.src = SILENT; player.play().catch(() => {}); } catch {}
+  try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch {}
+}
 let speakQ = [], liveTTS = false, liveSpeakBuf = "", ttsGen = 0;
 function queueSentences(flush) {
   const parts = liveSpeakBuf.match(/[^.!?]+[.!?]+["')\]]?\s*/g) || [];
@@ -1060,12 +1077,12 @@ async function liveStart() {
   wantHandsFree = false; $("handsfree").checked = false; pauseListening(); if (sess) stopListening();   // Live uses the mic itself
   speechSynthesis?.cancel();
   try {
-    liveOut = new (window.AudioContext || window.webkitAudioContext)(); await liveOut.resume();
-    liveAnalyser = liveOut.createAnalyser(); liveAnalyser.fftSize = 256; liveAnalyser.connect(liveOut.destination);
+    if (!liveOut || liveOut.state === "closed") unlockAudio();
+    await liveOut.resume();
     analyser = useJarvisVoice() ? null : liveAnalyser;                  // orb follows Gemini's real voice
     await liveStartMic();
   } catch (e) { liveStop(); liveUI(false, "Microphone problem: " + e.message); return; }
-  liveConnect();
+  liveConnect(); keepAwake();                                           // screen stays on, so you never have to touch it
   liveVideoTimer = setInterval(liveSendFrame, 1000);                   // JARVIS sees one frame per second
   store.set("liveAuto", true);
 }
@@ -1074,13 +1091,14 @@ function liveStop() {
   liveOn = false; liveReady = false; clearInterval(liveVideoTimer);
   try { ws?.close(); } catch {} ws = null; stopPlayback();
   liveMic?.getTracks().forEach(t => t.stop()); liveMic = null;
-  try { liveIn?.close(); } catch {} try { liveOut?.close(); } catch {}
+  try { liveIn?.close(); } catch {}                                    // keep the unlocked speaker context for next time
+  try { wakeLock?.release(); } catch {} wakeLock = null;
   analyser = null; liveUI(false, "Live mode: a real-time voice conversation where JARVIS watches your camera (like Gemini Live). Needs your free Gemini key.");
   setOrb("idle", "");
 }
 $("geminiKey").addEventListener("change", () => { if ($("geminiKey").value.trim() && !liveOn) liveStart(); });
 $("liveVoice").addEventListener("change", () => { stopJarvisVoice(); stopPlayback(); if (liveOn) analyser = useJarvisVoice() ? null : liveAnalyser; });
-$("live").onclick = () => { if (liveOn) { liveStop(); store.set("liveAuto", false); } else liveStart(); };
+$("live").onclick = () => { if (!liveOn) unlockAudio(); if (liveOn) { liveStop(); store.set("liveAuto", false); } else liveStart(); };
 
 // ---------- faces ----------
 async function register() {
@@ -1114,7 +1132,7 @@ async function openCamera() {
   if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
   video.srcObject = await navigator.mediaDevices.getUserMedia({
     video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 360 } }, audio: false });
-  await video.play();
+  await Promise.race([video.play().catch(() => {}), new Promise(r => setTimeout(r, 2000))]);
   mirror = facing === "user"; prev = null; faceCache = [];
 }
 $("flip").onclick = async () => {
@@ -1123,6 +1141,7 @@ $("flip").onclick = async () => {
   try { await openCamera(); } catch (e) { setStatus("Couldn't switch camera: " + e.message); }
 };
 $("start").onclick = async () => {
+  unlockAudio();                                                       // unlock sound while we still have the tap
   if (!navigator.mediaDevices?.getUserMedia) { setStatus("This browser can't use the camera here. Open the page from its https link in Safari or Chrome."); return; }
   try { await openCamera(); }
   catch (e) { setStatus("Camera blocked: " + e.message + ". Allow camera access for this page and reload."); return; }
