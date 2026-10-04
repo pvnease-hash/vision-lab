@@ -168,6 +168,9 @@ const MODES = [
   ["pose", "Body pose", "4"], ["mesh", "Face mesh", "5"], ["expr", "Expressions", "6"], ["motion", "Motion", "M"],
   ["seg", "Background blur", "7"], ["scene", "Scene", "8"], ["text", "Read text β", "9"], ["qr", "QR & barcodes", "0"],
   ["gaze", "Gaze & drowsy", "G"], ["draw", "Air draw", "D"], ["workout", "Workout reps", "W"], ["depth", "Depth β", "P"],
+  ["fingers", "Finger count", "N"], ["posture", "Posture check", "O"], ["distance", "Distance", "L"], ["color", "Color ID", "C"],
+  ["blur", "Face blur", "B"], ["people", "People counter", "U"], ["intruder", "Intruder alert", "I"], ["hud", "Iron Man HUD", "H"],
+  ["pulse", "Heart rate β", "K"],
   ["filter", "Filter: off", "F"],
 ];
 const $ = id => document.getElementById(id);
@@ -331,7 +334,10 @@ async function make(cls, path, extra = {}, mode = "VIDEO") {
     catch (e) { if (delegate === "CPU") throw e; }
   }
 }
+const NEEDS = { fingers: "hands", posture: "pose", distance: "faces", blur: "faces", intruder: "objects", people: "objects", pulse: "mesh", hud: "objects" };
 async function ensure(key) {
+  if (key === "color") return;
+  if (NEEDS[key]) { if (!vision) return; await ensure(NEEDS[key]); if (models[NEEDS[key]]) models[key] = true; return; }
   if (key === "motion" || key === "filter" || models[key] || loading[key] || !vision) return;   // models load once the camera starts
   loading[key] = true; setStatus(`Loading ${key} model…`);
   try {
@@ -500,6 +506,7 @@ const FILTERS = [
   { name: "Predator", css: "", thermal: true, invert: true },
   { name: "Terminator", css: "grayscale(1) sepia(1) hue-rotate(-50deg) saturate(6) contrast(1.3)", hud: true },
   { name: "X-ray", css: "grayscale(1) invert(1) contrast(1.6)" },
+  { name: "ASCII", css: "", ascii: true },
   { name: "Thermal", css: "", thermal: true }, { name: "Comic", css: "contrast(1.6) saturate(2.2)" },
   { name: "Matrix", css: "grayscale(1) sepia(1) hue-rotate(80deg) saturate(8) brightness(0.9) contrast(1.4)" },
   { name: "Noir", css: "grayscale(1) contrast(1.5)" } ];
@@ -530,7 +537,18 @@ function drawVideoFrame() {
     for (let i = 0; i < d.length; i += 4) { let v = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8; if (f.invert) v = 255 - v; d[i] = THERMAL[v * 3]; d[i + 1] = THERMAL[v * 3 + 1]; d[i + 2] = THERMAL[v * 3 + 2]; }
     ctx.putImageData(img, 0, 0);
   }
+  if (f.ascii) drawAscii();
   if (f.grain || f.tube || f.scan || f.hud) drawLensFx(f);
+}
+const asciiC = document.createElement("canvas"), actxA = asciiC.getContext("2d", { willReadFrequently: true }), RAMP = " .:-=+*#%@";
+function drawAscii() {
+  const cols = 110, rows = Math.round(cols * H() / W() * 0.5); asciiC.width = cols; asciiC.height = rows;
+  actxA.drawImage(out, 0, 0, cols, rows); const d = actxA.getImageData(0, 0, cols, rows).data;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#020a04"; ctx.fillRect(0, 0, W(), H());
+  const cw = W() / cols, ch = H() / rows; ctx.font = `${Math.ceil(ch)}px monospace`; ctx.fillStyle = "#3dff7a"; ctx.textBaseline = "top";
+  for (let y = 0; y < rows; y++) { let line = ""; for (let x = 0; x < cols; x++) { const i = (y * cols + x) * 4, v = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8; line += RAMP[Math.min(9, v / 26 | 0)]; }
+    ctx.fillText(line, 0, y * ch, W()); }
+  ctx.restore();
 }
 // film grain, scanlines, flicker and the round image-intensifier tube (like a Vietnam-era AN/PVS-2 starlight scope)
 const grainC = document.createElement("canvas"); grainC.width = grainC.height = 256;
@@ -633,13 +651,16 @@ let drawing = null, openSince = 0;
 function drawAir(now) {
   for (const h of handSmooth) {
     const tip = h.cur[8];
-    if (h.g === "Pointing up" || h.g === "Hand") { if (!drawing) { drawing = []; X.strokes.push(drawing); } const last = drawing[drawing.length - 1];
+    const up = fingersUp(h.cur), pen = up[1] && !up[2] && !up[3] && !up[4];   // only the index finger raised
+    if (pen) { if (!drawing) { drawing = []; X.strokes.push(drawing); } const last = drawing[drawing.length - 1];
       if (!last || Math.hypot(last.x - tip.x, last.y - tip.y) > 0.004) drawing.push({ x: tip.x, y: tip.y }); }
     else drawing = null;
-    if (h.g === "Open hand") { openSince ||= now; if (now - openSince > 800) { X.strokes = []; drawing = null; } } else openSince = 0;
+    if (up.filter(Boolean).length >= 5 || h.g === "Open hand") { openSince ||= now; if (now - openSince > 800) { X.strokes = []; drawing = null; } } else openSince = 0;
     break;
   }
-  if (!handSmooth.length) drawing = null;
+  if (!handSmooth.length || !R.hands?.landmarks?.length) drawing = null;
+  const h0 = handSmooth[0];
+  if (h0 && R.hands?.landmarks?.length) { const t = h0.cur[8]; ctx.fillStyle = drawing ? "#2fd4ff" : "rgba(255,255,255,.5)"; ctx.beginPath(); ctx.arc(t.x * W(), t.y * H(), drawing ? 9 : 6, 0, 7); ctx.fill(); }
   ctx.save(); ctx.lineCap = ctx.lineJoin = "round"; ctx.shadowColor = "#2fd4ff"; ctx.shadowBlur = 14; ctx.strokeStyle = "#bff3ff"; ctx.lineWidth = 6;
   for (const st of X.strokes) { if (st.length < 2) continue; ctx.beginPath(); st.forEach((p, i) => i ? ctx.lineTo(p.x * W(), p.y * H()) : ctx.moveTo(p.x * W(), p.y * H())); ctx.stroke(); }
   ctx.restore();
@@ -681,6 +702,116 @@ function drawExtras(now) {
     ctx.globalAlpha = 0.9; ctx.drawImage(X.depth, W() - w - 8, H() - h - 8, w, h); ctx.restore(); panel(["Depth: bright = near"], W() - w - 8, H() - h - 40); }
   if (!active.has("draw") && X.strokes.length) X.strokes = [];
 }
+
+// =================== EVEN MORE MODES ===================
+// which fingers are up (works at any hand angle: a finger is "up" when its tip is farther from the wrist than its middle joint)
+function fingersUp(lm) {
+  const d = (a, b) => Math.hypot(lm[a].x - lm[b].x, lm[a].y - lm[b].y);
+  return [d(4, 17) > d(3, 17) * 1.1 && d(4, 5) > d(3, 5) * 0.9, d(8, 0) > d(6, 0) * 1.15, d(12, 0) > d(10, 0) * 1.15, d(16, 0) > d(14, 0) * 1.15, d(20, 0) > d(18, 0) * 1.15];
+}
+function drawFingers() {
+  let total = 0;
+  for (const h of handSmooth) { if (!R.hands?.landmarks?.length) break; const n = fingersUp(h.cur).filter(Boolean).length; total += n;
+    const w = h.cur[0]; ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.font = "bold 46px -apple-system,sans-serif"; ctx.fillStyle = "#ffd166";
+    ctx.fillText(String(n), (mirror ? 1 - w.x : w.x) * W() - 12, w.y * H() + 54); ctx.restore(); }
+  X.fingers = total; panel([`✋ Fingers up: ${total}`], 8, H() - 100, "#ffd166");
+}
+// posture: learns your good posture in the first 3 s, then warns when your head drops / you slouch
+let postureBase = 0, postureT0 = 0, slouchSince = 0, postureWarned = 0;
+function drawPosture(now) {
+  const lm = R.pose?.landmarks?.[0]; if (!lm) return;
+  const sw = Math.hypot(lm[11].x - lm[12].x, lm[11].y - lm[12].y), ratio = ((lm[11].y + lm[12].y) / 2 - lm[0].y) / Math.max(0.01, sw);
+  if (!postureT0) postureT0 = now;
+  if (now - postureT0 < 3000) { postureBase = postureBase ? postureBase * 0.9 + ratio * 0.1 : ratio; panel(["🪑 Sit up straight… learning your good posture"], 8, H() - 136, "#9ad1ff"); return; }
+  const score = Math.max(0, Math.min(100, Math.round(ratio / postureBase * 100)));
+  const bad = score < 82; if (bad) slouchSince ||= now; else slouchSince = 0;
+  X.posture = bad ? "slouching" : "good";
+  panel([`🪑 Posture: ${bad ? "slouching" : "good"} (${score}%)`], 8, H() - 136, bad ? "#ff8c42" : "#3ddc84");
+  if (slouchSince && now - slouchSince > 4000) { banner("🪑 SIT UP STRAIGHT", "#ff8c42"); if (now - postureWarned > 30000) { postureWarned = now; say("Sit up straight, sir."); } }
+}
+// distance from the camera, estimated from face width (an average face is ~15 cm wide)
+function drawDistance() {
+  for (const d of R.faces || []) { const b = d.boundingBox, focal = W() * 0.85, cm = Math.round(15 * focal / Math.max(1, b.width));
+    X.distance = cm; label(`📏 ~${cm} cm (${(cm / 2.54).toFixed(0)} in)`, b.originX + b.width, b.originY + b.height + 24, "#9ad1ff"); }
+}
+// colour of whatever is under the crosshair
+const COLORS = [["Black",0,0,0],["White",255,255,255],["Gray",128,128,128],["Silver",192,192,192],["Red",220,30,30],["Dark red",120,10,10],["Pink",255,150,190],["Orange",255,140,0],["Brown",120,70,30],["Beige",225,205,165],["Yellow",250,220,30],["Gold",210,170,50],["Olive",120,120,30],["Green",40,170,60],["Dark green",20,80,30],["Lime",160,230,60],["Teal",20,130,130],["Cyan",40,210,230],["Sky blue",120,190,240],["Blue",30,80,220],["Navy",20,30,90],["Purple",120,50,160],["Violet",170,110,220],["Magenta",220,40,180],["Skin tone",210,160,130]];
+function drawColor() {
+  const s = 18, cx = W() / 2, cy = H() / 2, c = grab(160), wc = wctx.getImageData(c.width / 2 - 3, c.height / 2 - 3, 6, 6).data;
+  let r = 0, g = 0, b = 0; for (let i = 0; i < wc.length; i += 4) { r += wc[i]; g += wc[i + 1]; b += wc[i + 2]; } const n = wc.length / 4; r = r / n | 0; g = g / n | 0; b = b / n | 0;
+  const name = COLORS.reduce((best, k) => { const dd = (k[1] - r) ** 2 + (k[2] - g) ** 2 + (k[3] - b) ** 2; return dd < best[1] ? [k[0], dd] : best; }, ["", 1e9])[0];
+  const hex = "#" + [r, g, b].map(v => v.toString(16).padStart(2, "0")).join("").toUpperCase(); X.color = `${name} ${hex}`;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.strokeRect(cx - s, cy - s, s * 2, s * 2);
+  ctx.beginPath(); ctx.moveTo(cx - 40, cy); ctx.lineTo(cx - s, cy); ctx.moveTo(cx + s, cy); ctx.lineTo(cx + 40, cy); ctx.moveTo(cx, cy - 40); ctx.lineTo(cx, cy - s); ctx.moveTo(cx, cy + s); ctx.lineTo(cx, cy + 40); ctx.stroke();
+  ctx.fillStyle = hex; ctx.fillRect(cx + 46, cy - 16, 32, 32); ctx.strokeRect(cx + 46, cy - 16, 32, 32); ctx.restore();
+  panel([`🎨 ${name}  ${hex}`, `rgb(${r}, ${g}, ${b})`], W() / 2 + 84, H() / 2 - 22);
+}
+// privacy: blur every face
+function drawFaceBlur() {
+  for (const d of R.faces || []) { const b = d.boundingBox, pad = b.width * 0.25, x = Math.max(0, b.originX - pad), y = Math.max(0, b.originY - pad * 1.4), w = b.width + pad * 2, h = b.height + pad * 2.4;
+    ctx.save(); ctx.beginPath(); ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, 7); ctx.clip(); ctx.filter = "blur(18px)"; ctx.drawImage(video, x, y, w, h, x, y, w, h); ctx.restore(); }
+}
+// people counter
+let peopleMax = 0;
+function drawPeople() {
+  const n = (R.objects || []).filter(d => d.categories[0].categoryName === "person" && d.categories[0].score > 0.45).length;
+  peopleMax = Math.max(peopleMax, n); X.people = n; panel([`👥 People: ${n}`, `Most at once: ${peopleMax}`], W() - 170, 30, "#9ad1ff");
+}
+// intruder alert: arms after 5 s, then sounds an alarm when a person shows up
+let intruderArmed = 0, lastAlarm = 0; const intruderLog = [];
+function beep() { try { const a = liveOut || new AudioContext(); const o = a.createOscillator(), g = a.createGain(); o.frequency.value = 880; o.type = "square"; g.gain.value = 0.15; o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime + 0.4); } catch {} }
+function drawIntruder(now) {
+  if (!intruderArmed) intruderArmed = now + 5000;
+  if (now < intruderArmed) { panel([`🛡 Arming in ${Math.ceil((intruderArmed - now) / 1000)} s… step out of view`], 8, 64, "#ffd166"); return; }
+  const person = (R.objects || []).some(d => d.categories[0].categoryName === "person" && d.categories[0].score > 0.55);
+  if (person) { banner("⚠ INTRUDER DETECTED", "#ff4d4d"); if (now - lastAlarm > 8000) { lastAlarm = now; beep(); say("Intruder detected."); intruderLog.unshift(new Date().toLocaleTimeString()); intruderLog.length = Math.min(intruderLog.length, 4); } }
+  panel(["🛡 Intruder alert: ARMED", ...intruderLog.map(t => "⚠ person at " + t)], 8, 64, person ? "#ff4d4d" : "#3ddc84");
+}
+// Iron Man style HUD
+function drawHud(now) {
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const w = W(), h = H(), c = "rgba(47,212,255,.85)"; ctx.strokeStyle = c; ctx.fillStyle = c; ctx.lineWidth = 2;
+  const L = 30; for (const [x, y, dx, dy] of [[12, 12, 1, 1], [w - 12, 12, -1, 1], [12, h - 12, 1, -1], [w - 12, h - 12, -1, -1]]) { ctx.beginPath(); ctx.moveTo(x + dx * L, y); ctx.lineTo(x, y); ctx.lineTo(x, y + dy * L); ctx.stroke(); }
+  ctx.beginPath(); ctx.arc(w / 2, h / 2, 26, now / 600, now / 600 + 4); ctx.stroke(); ctx.beginPath(); ctx.arc(w / 2, h / 2, 40, -now / 900, -now / 900 + 2); ctx.stroke();
+  ctx.font = "12px monospace"; ctx.fillText("J.A.R.V.I.S. ONLINE", w - 170, h - 40); ctx.fillText(new Date().toLocaleTimeString(), w - 170, h - 24);
+  ctx.fillText(`TARGETS: ${tracks.objects.filter(t => t.hits >= 2).length + (R.faces?.length || 0)}`, 24, h - 24);
+  ctx.restore();
+  ctx.strokeStyle = c; ctx.lineWidth = 2;
+  const targets = [...tracks.objects.filter(t => t.hits >= 2).map(t => [t.x + t.w / 2, t.y + t.h / 2, Math.max(t.w, t.h) / 2])];
+  if (!active.has("objects")) for (const d of R.objects || []) { const b = d.boundingBox; if (d.categories[0].score > 0.4) targets.push([b.originX + b.width / 2, b.originY + b.height / 2, Math.max(b.width, b.height) / 2]); }
+  for (const [x, y, r] of targets) { ctx.beginPath(); ctx.arc(x, y, r * 0.9, now / 400, now / 400 + 1.2); ctx.stroke(); ctx.beginPath(); ctx.arc(x, y, r * 0.9, now / 400 + 3.14, now / 400 + 4.3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x - 8, y); ctx.lineTo(x + 8, y); ctx.moveTo(x, y - 8); ctx.lineTo(x, y + 8); ctx.stroke(); }
+}
+// heart rate (beta): tiny colour changes in your forehead skin with each heartbeat (remote PPG). Hold still, good light. Not medical.
+const ppg = []; let bpm = 0, bpmT = 0;
+function drawPulse(now) {
+  const lm = R.mesh?.faceLandmarks?.[0]; if (!lm) { panel(["❤️ Heart rate: look at the camera"], 8, H() - 172, "#ff8c9a"); return; }
+  const vw = video.videoWidth, vh = video.videoHeight, fw = Math.abs(lm[454].x - lm[234].x) * vw;
+  const cx = lm[151].x * vw, cy = lm[151].y * vh + fw * 0.05, s = Math.max(8, fw * 0.18);
+  const c = grab(320), k = 320 / vw, im = wctx.getImageData(Math.max(0, (cx - s) * k), Math.max(0, (cy - s * 0.5) * k), Math.max(2, 2 * s * k), Math.max(2, s * k)).data;
+  let gsum = 0; for (let i = 1; i < im.length; i += 4) gsum += im[i]; ppg.push([now, gsum / (im.length / 4)]);
+  while (ppg.length && now - ppg[0][0] > 12000) ppg.shift();
+  ctx.strokeStyle = "#ff8c9a"; ctx.lineWidth = 2; ctx.strokeRect(cx - s, cy - s * 0.5, 2 * s, s);
+  if (ppg.length > 60 && now - ppg[0][0] > 8000 && now - bpmT > 1000) {
+    bpmT = now; const fs = 30, t0 = ppg[0][0], N = Math.floor((now - t0) / 1000 * fs), sig = new Float64Array(N);
+    for (let i = 0, j = 0; i < N; i++) { const t = t0 + i * 1000 / fs; while (j < ppg.length - 2 && ppg[j + 1][0] < t) j++; const [ta, va] = ppg[j], [tb, vb] = ppg[j + 1]; sig[i] = va + (vb - va) * ((t - ta) / Math.max(1, tb - ta)); }
+    const win = fs; const det = sig.map((v, i) => { let m = 0, c2 = 0; for (let q = Math.max(0, i - win); q < Math.min(N, i + win); q++) { m += sig[q]; c2++; } return (v - m / c2) * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1))); });
+    let best = 0, bestP = 0; for (let b = 45; b <= 170; b++) { const f = b / 60; let re = 0, im2 = 0; for (let i = 0; i < N; i++) { const a = 2 * Math.PI * f * i / fs; re += det[i] * Math.cos(a); im2 += det[i] * Math.sin(a); } const p = re * re + im2 * im2; if (p > bestP) { bestP = p; best = b; } }
+    bpm = bpm ? Math.round(bpm * 0.6 + best * 0.4) : best;
+  }
+  X.pulse = bpm;
+  panel([bpm ? `❤️ ~${bpm} BPM (estimate, not medical)` : `❤️ Measuring… hold still ${Math.max(0, 8 - Math.floor((now - (ppg[0]?.[0] || now)) / 1000))}s`], 8, H() - 172, "#ff8c9a");
+}
+function drawMore(now) {
+  if (active.has("blur")) drawFaceBlur();
+  if (active.has("hud")) drawHud(now);
+  if (active.has("fingers")) drawFingers();
+  if (active.has("posture")) drawPosture(now); else postureT0 = 0;
+  if (active.has("distance")) drawDistance();
+  if (active.has("color")) drawColor();
+  if (active.has("people")) drawPeople();
+  if (active.has("intruder")) drawIntruder(now); else intruderArmed = 0;
+  if (active.has("pulse")) drawPulse(now); else ppg.length = 0;
+}
 // ---------- main loop ----------
 // The video is drawn every frame (smooth). The AI models run one at a time, taking turns,
 // only as often as this computer can keep up, and pause while the on-device brain is thinking.
@@ -691,12 +822,13 @@ const NICE = { Closed_Fist: "Fist", Open_Palm: "Open hand", Pointing_Up: "Pointi
                Thumb_Up: "Thumbs up", Victory: "Peace", ILoveYou: "I love you", None: "Hand" };
 function runOneModel(t) {
   const jobs = [];
-  if (active.has("objects") && models.objects) jobs.push("objects");
-  if (active.has("faces") && models.faces) jobs.push("faces");
-  if ((active.has("hands") || active.has("objects") || active.has("draw")) && models.hands) jobs.push("hands");
-  if ((active.has("pose") || active.has("workout")) && models.pose) jobs.push("pose");
+  const any = (...k) => k.some(x => active.has(x));
+  if (any("objects", "intruder", "people", "hud") && models.objects) jobs.push("objects");
+  if (any("faces", "distance", "blur") && models.faces) jobs.push("faces");
+  if (any("hands", "objects", "draw", "fingers") && models.hands) jobs.push("hands");
+  if (any("pose", "workout", "posture") && models.pose) jobs.push("pose");
   if (active.has("seg") && models.seg) jobs.push("seg");
-  if ((active.has("mesh") || active.has("expr") || active.has("gaze")) && models.mesh) jobs.push("mesh");
+  if ((active.has("mesh") || active.has("expr") || active.has("gaze") || active.has("pulse")) && models.mesh) jobs.push("mesh");
   if (!jobs.length) return false;
   const job = jobs[turn++ % jobs.length];
   if (job === "objects") R.objects = models.objects.detectForVideo(video, t).detections;
@@ -784,17 +916,18 @@ function drawResults() {
       if (!["Unknown", "Face"].includes(name) && Date.now() - (greeted[name] || 0) > 120000) { greeted[name] = Date.now(); say(`Hello, ${name}`); } }
     drawTracks(tracks.faces, now, it => it.text === "Unknown" ? "#ff8c42" : "#3ddc84");
   } else tracks.faces = [];
-  if (active.has("hands") && R.hands) {
-    const r = R.hands; seen.gestures = [];
+  if ((active.has("hands") || active.has("draw") || active.has("fingers")) && R.hands) {
+    const r = R.hands; seen.gestures = []; const showHands = active.has("hands");
     if (r !== lastHandRes) { lastHandRes = r;
       handSmooth = r.landmarks.map((lm, i) => { const prev = handSmooth[i];
         return { side: r.handedness[i]?.[0]?.categoryName || "Hand", g: NICE[r.gestures[i]?.[0]?.categoryName] || "Hand",
                  target: lm, cur: prev && prev.cur.length === lm.length ? prev.cur : lm.map(p => ({ ...p })) }; }); }
     for (const h of handSmooth) {
       h.cur = h.cur.map((p, j) => ({ x: p.x + (h.target[j].x - p.x) * 0.35, y: p.y + (h.target[j].y - p.y) * 0.35, z: h.target[j].z }));
+      seen.gestures.push(h.g);
+      if (!showHands) continue;
       draw.drawConnectors(h.cur, GestureRecognizer.HAND_CONNECTIONS, { color: "#ff4fd8", lineWidth: 3 });
       draw.drawLandmarks(h.cur, { color: "#fff", radius: 2 });
-      seen.gestures.push(h.g);
       label(`${h.side}: ${h.g}`, h.cur[0].x * W() + 40, h.cur[0].y * H() + 40, "#ff4fd8");
     }
   }
@@ -834,7 +967,7 @@ function loop() {
       }
     }
     drawResults();
-    drawExtras(t);
+    drawExtras(t); drawMore(t);
     if (active.has("motion") && frameNo % 2 === 0) motion();
     fps = 0.9 * fps + 0.1 * (1000 / Math.max(1, t - last)); last = t;
     if (t - aiT > 1000) { aiRate = aiCount * 1000 / (t - aiT); aiCount = 0; aiT = t; fpsShown = fps; }
@@ -866,6 +999,12 @@ function sceneText() {
   if (active.has("qr") && X.codes.length) parts.push("Codes: " + X.codes.map(c => c.value).join(", "));
   if (active.has("gaze") && X.gaze) parts.push("Gaze: " + X.gaze);
   if (active.has("workout")) parts.push(`Workout: ${X.squats} squats, ${X.raises} arm raises`);
+  if (active.has("fingers")) parts.push(`Fingers held up: ${X.fingers ?? 0}`);
+  if (active.has("posture") && X.posture) parts.push("Posture: " + X.posture);
+  if (active.has("distance") && X.distance) parts.push(`Distance from camera: about ${X.distance} cm`);
+  if (active.has("color") && X.color) parts.push("Colour at the centre crosshair: " + X.color);
+  if (active.has("people")) parts.push(`People in view: ${X.people ?? 0}`);
+  if (active.has("pulse") && X.pulse) parts.push(`Estimated heart rate: ${X.pulse} BPM`);
   return parts.join(". ") || "No detectors are switched on.";
 }
 const SYSTEM = "You are JARVIS, Christian's witty, warm and genuinely helpful British AI assistant, talking with him out loud. " +
