@@ -92,10 +92,14 @@
         <summary>Brain &amp; voice settings</summary>
         <label for="brain"><small>Brain</small></label>
         <select id="brain">
+          <option value="gemini">Gemini · free key · smart, sees the camera (recommended)</option>
+          <option value="groq">Groq Llama 70B · free key · very fast, no camera</option>
           <option value="local-small">Free · on this device · small (≈0.5 GB download)</option>
           <option value="local-big">Free · on this device · smarter (≈1 GB download)</option>
           <option value="claude">Claude · really sees the picture (API key, paid)</option>
         </select>
+        <input id="geminiKey" type="password" placeholder="Gemini API key (free: aistudio.google.com/apikey)">
+        <input id="groqKey" type="password" placeholder="Groq API key (free: console.groq.com/keys)">
         <input id="apikey" type="password" placeholder="Claude API key (only for the Claude brain)">
         <label for="recMode"><small>Speech recognition</small></label>
         <select id="recMode">
@@ -492,7 +496,7 @@ function loop() {
     mirror ? ctx.setTransform(-1, 0, 0, 1, W(), 0) : ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(video, 0, 0, W(), H());
     const t = performance.now(); frameNo++;
-    const brainBusy = busy && $("brain").value !== "claude";          // local brain needs the GPU
+    const brainBusy = busy && $("brain").value.startsWith("local");    // on-device brain needs the GPU
     if (!brainBusy && t >= nextAI) {
       const t0 = performance.now();
       if (runOneModel(t0)) {
@@ -511,7 +515,7 @@ function loop() {
 }
 
 // ---------- JARVIS brain ----------
-for (const id of ["apikey", "elKey", "elVoice", "brain", "voicePick", "recMode"]) {
+for (const id of ["apikey", "geminiKey", "groqKey", "elKey", "elVoice", "brain", "voicePick", "recMode"]) {
   const v = store.get(id, null); if (v !== null && id !== "voicePick") $(id).value = v;
   $(id).onchange = () => store.set(id, $(id).value.trim());
 }
@@ -529,8 +533,49 @@ function sceneText() {
   if (active.has("motion")) parts.push("Motion: " + (seen.motion ? "yes" : "no"));
   return parts.join(". ") || "No detectors are switched on.";
 }
-const SYSTEM = "You are JARVIS, a witty, loyal British AI assistant helping your creator, Christian, through his camera. " +
-  "Reply in one or two short spoken sentences, no lists, no markdown, no emojis.";
+const SYSTEM = "You are JARVIS, Christian's witty, warm and genuinely helpful British AI assistant, talking with him out loud. " +
+  "Hold a real conversation: answer questions properly with real knowledge, give opinions, ask a follow-up when it helps, remember what was said earlier. " +
+  "You can see through his camera; use what you see when it's relevant, but don't describe the scene unless asked. " +
+  "Your words are spoken aloud, so keep replies natural and fairly short (usually 1-3 sentences, longer only if he asks for detail), with no lists, markdown or emojis.";
+function snapshot() {
+  if (!started || !video.videoWidth) return null;
+  const c = document.createElement("canvas"); c.width = 640; c.height = Math.round(640 * video.videoHeight / video.videoWidth);
+  c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.75).split(",")[1];
+}
+async function gemini(q, scene) {
+  const key = $("geminiKey").value.trim();
+  if (!key) throw new Error("add your free Gemini key in Brain & voice settings (get one at aistudio.google.com/apikey)");
+  const img = snapshot();
+  const contents = history.map(h => ({ role: h.role === "assistant" ? "model" : "user", parts: [{ text: h.content }] }));
+  contents.push({ role: "user", parts: [...(img ? [{ inline_data: { mime_type: "image/jpeg", data: img } }] : []), { text: `${q}\n\n(Camera detectors report: ${scene})` }] });
+  for (const model of ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]) {
+    for (const thinking of [true, false]) {
+      const gen = { maxOutputTokens: 400, temperature: 0.8, ...(thinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}) };
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({ system_instruction: { parts: [{ text: SYSTEM }] }, contents, generationConfig: gen }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) { const t = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("").trim(); if (t) return t; }
+      const msg = j.error?.message || ("HTTP " + r.status);
+      if (r.status === 400 && /thinking/i.test(msg)) continue;          // model doesn't take that setting
+      if (r.status === 404 || (r.status === 400 && /not found|not supported/i.test(msg))) break;   // try next model
+      if (!r.ok) throw new Error("Gemini: " + msg);
+    }
+  }
+  throw new Error("Gemini didn't answer. Check the key.");
+}
+async function groq(q, scene) {
+  const key = $("groqKey").value.trim();
+  if (!key) throw new Error("add your free Groq key in Brain & voice settings (get one at console.groq.com/keys)");
+  const r = await fetch("https://api.groq.com/openai/v1/chat/completions", { method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer " + key },
+    body: JSON.stringify({ model: "llama-3.3-70b-versatile", max_tokens: 400, temperature: 0.8, messages: [
+      { role: "system", content: SYSTEM + " You can't see the image directly; you get a live report from camera detectors: " + scene },
+      ...history, { role: "user", content: q } ] }) });
+  const j = await r.json(); if (!r.ok) throw new Error("Groq: " + (j.error?.message || r.status));
+  return j.choices[0].message.content.trim();
+}
 function addChat(who, text) { const d = document.createElement("div"); d.className = who; d.textContent = text; $("chat").appendChild(d); $("chat").scrollTop = 1e9; return d; }
 
 let llm = null, llmId = null;
@@ -552,6 +597,8 @@ async function localEngine(kind) {
 
 async function think(q) {
   const brain = $("brain").value, scene = sceneText();
+  if (brain === "gemini") return gemini(q, scene);
+  if (brain === "groq") return groq(q, scene);
   if (brain === "claude") {
     const key = $("apikey").value.trim();
     if (!started) throw new Error("start the camera first so Claude can see");
@@ -564,7 +611,7 @@ async function think(q) {
       { type: "text", text: `${q}\n(Detectors report: ${scene})` } ] }];
     const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
       headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
-      body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 300, system: SYSTEM, messages: msgs }) });
+      body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 400, system: SYSTEM, messages: msgs }) });
     const j = await r.json(); if (!r.ok) throw new Error(j.error?.message || r.status);
     return j.content[0].text.trim();
   }
@@ -600,7 +647,7 @@ async function ask(q) {
     if (!a) {
       a = await think(q);
       history.push({ role: "user", content: q }, { role: "assistant", content: a });
-      while (history.length > 8) history.shift();
+      while (history.length > 20) history.shift();
     }
     bubble.textContent = a; say(a);
   } catch (e) { bubble.textContent = "Problem: " + e.message; setOrb("idle", "Problem: " + e.message); }
