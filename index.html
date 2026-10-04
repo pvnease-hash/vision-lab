@@ -309,7 +309,7 @@ async function make(cls, path, extra = {}, mode = "VIDEO") {
   }
 }
 async function ensure(key) {
-  if (key === "motion" || models[key] || loading[key]) return;
+  if (key === "motion" || models[key] || loading[key] || !vision) return;   // models load once the camera starts
   loading[key] = true; setStatus(`Loading ${key} model…`);
   try {
     if (key === "objects") {
