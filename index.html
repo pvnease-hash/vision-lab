@@ -35,6 +35,8 @@
   #talk { text-align:center; font-size:16px; padding:12px; background:#1d3b2a; border-color:#2e6b47; }
   #dictate.listening { background:#b3261e; border-color:#b3261e; }
   #talk.listening { background:#7a2420; border-color:#b3261e; }
+  #live { width:100%; text-align:center; font-size:16px; padding:12px; margin-bottom:6px; background:#1f3a5f; border-color:#2f6fb0; }
+  #live.on { background:#0e5a7a; border-color:#2fd4ff; box-shadow:0 0 0 2px rgba(47,212,255,.25) inset; }
   #talk.armed { background:#16302a; border-color:#2e6b47; }
   @keyframes pulse { from { opacity:1 } to { opacity:.6 } }
   #chat { max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin:8px 0; }
@@ -80,6 +82,8 @@
     </div>
     <div class="card">
       <h2>JARVIS · talk to it</h2>
+      <button id="live">⚡ Go Live with JARVIS</button>
+      <small id="liveNote">Live mode: a real-time voice conversation where JARVIS watches your camera (like Gemini Live). Needs your free Gemini key.</small>
       <button id="talk">🎤 Tap and talk</button>
       <label class="row"><input type="checkbox" id="handsfree" checked> Hands-free: just say “Jarvis, …”</label>
       <div id="chat"></div>
@@ -204,6 +208,7 @@ function sayDone() {
   resumeListening();
 }
 async function say(text) {
+  if (typeof liveOn !== "undefined" && liveOn) return;
   if (!voiceOn) { setOrb("idle", text); return; }
   speaking = true; pauseListening(); setOrb("speaking", text);
   const elKey = $("elKey").value.trim(), elVoice = $("elVoice").value.trim();
@@ -256,7 +261,7 @@ function drawOrb(t) {
   if (orbState === "listening") target = 0.3 + 0.12 * Math.sin(t / 700);
   if (orbState === "thinking") target = 0.2;
   if (orbState === "speaking") {
-    if (analyser && !player.paused) { analyser.getByteTimeDomainData(buf); let sum = 0; for (const v of buf) sum += ((v - 128) / 128) ** 2; target = Math.min(1, Math.sqrt(sum / buf.length) * 5); }
+    if (analyser && (liveOn || !player.paused)) { analyser.getByteTimeDomainData(buf); let sum = 0; for (const v of buf) sum += ((v - 128) / 128) ** 2; target = Math.min(1, Math.sqrt(sum / buf.length) * 5); }
     else target = 0.3 + 0.3 * orbKick + 0.12 * Math.abs(Math.sin(t / 160) * Math.sin(t / 70));
   }
   orbKick *= 0.93; orbLevel += (target - orbLevel) * 0.12;
@@ -880,6 +885,119 @@ document.addEventListener("pointerdown", autoStart, { once: true });
 navigator.permissions?.query({ name: "microphone" }).then(p => { log("mic permission: " + p.state); if (p.state === "granted") autoStart(); }).catch(() => {});
 $("recMode").addEventListener("change", () => { browserBroken = false; if (sess) pauseListening(); if (wantHandsFree) resumeListening(); });
 
+// ---------- GEMINI LIVE: real-time voice + vision conversation ----------
+let liveOn = false, ws = null, liveMic = null, liveIn = null, liveOut = null, liveAnalyser = null, liveNext = 0, liveSources = [];
+let liveVideoTimer = null, liveUserBubble = null, liveAiBubble = null, liveModelIdx = 0, liveShape = 0, liveReady = false, liveRetry = 0;
+const LIVE_MODELS = ["models/gemini-3.8-live", "models/gemini-live-2.5-flash-preview", "models/gemini-2.0-flash-live-001"];
+const LIVE_SYSTEM = SYSTEM.replace("Your words are spoken aloud", "You are in a live voice call with him and can see his camera feed continuously. Speak with a refined British accent, like a butler-meets-genius AI. Your words are spoken aloud") +
+  " If he asks what you see, look at the latest camera frame. Keep it snappy; he can interrupt you any time.";
+const b64 = buf => { let s = "", u = new Uint8Array(buf); for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+function liveSend(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+function liveSetup() {
+  const model = LIVE_MODELS[liveModelIdx];
+  const voice = { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Charon" } } } };
+  const common = { model, systemInstruction: { parts: [{ text: LIVE_SYSTEM }] }, inputAudioTranscription: {}, outputAudioTranscription: {} };
+  return liveShape === 0
+    ? { setup: { ...common, responseModalities: ["AUDIO"], ...voice } }
+    : { setup: { ...common, generationConfig: { responseModalities: ["AUDIO"], ...voice } } };
+}
+function liveUI(on, msg) {
+  $("live").classList.toggle("on", on);
+  $("live").textContent = on ? "⏹ End Live" : "⚡ Go Live with JARVIS";
+  if (msg !== undefined) $("liveNote").textContent = msg;
+}
+function stopPlayback() { for (const s of liveSources) { try { s.stop(); } catch {} } liveSources = []; liveNext = 0; }
+function playPcm(b64data, rate) {
+  const bin = atob(b64data), n = bin.length >> 1, f = new Float32Array(n);
+  for (let i = 0; i < n; i++) { let v = bin.charCodeAt(2 * i) | (bin.charCodeAt(2 * i + 1) << 8); if (v & 0x8000) v -= 0x10000; f[i] = v / 32768; }
+  const buf = liveOut.createBuffer(1, n, rate); buf.copyToChannel(f, 0);
+  const src = liveOut.createBufferSource(); src.buffer = buf; src.connect(liveAnalyser);
+  liveNext = Math.max(liveNext, liveOut.currentTime + 0.03); src.start(liveNext); liveNext += buf.duration;
+  liveSources.push(src); src.onended = () => { liveSources = liveSources.filter(x => x !== src); if (!liveSources.length && liveOn) setOrb("listening"); };
+  setOrb("speaking");
+}
+async function liveStartMic() {
+  liveMic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+  liveIn = new (window.AudioContext || window.webkitAudioContext)(); await liveIn.resume();
+  const src = liveIn.createMediaStreamSource(liveMic), proc = liveIn.createScriptProcessor(4096, 1, 1), ratio = liveIn.sampleRate / 16000;
+  proc.onaudioprocess = e => {
+    if (!liveReady) return;
+    const x = e.inputBuffer.getChannelData(0), n = Math.floor(x.length / ratio), pcm = new Int16Array(n); let peak = 0;
+    for (let i = 0; i < n; i++) { const a = Math.floor(i * ratio), bEnd = Math.min(x.length, Math.floor((i + 1) * ratio)); let sum = 0;
+      for (let j = a; j < bEnd; j++) sum += x[j]; const v = sum / Math.max(1, bEnd - a); peak = Math.max(peak, Math.abs(v));
+      pcm[i] = Math.max(-1, Math.min(1, v)) * 0x7fff; }
+    if (!liveSources.length) orbLevel = Math.max(orbLevel, Math.min(1, peak * 3));
+    liveSend({ realtimeInput: { audio: { data: b64(pcm.buffer), mimeType: "audio/pcm;rate=16000" } } });
+  };
+  const mute = liveIn.createGain(); mute.gain.value = 0; src.connect(proc); proc.connect(mute); mute.connect(liveIn.destination);
+}
+function liveSendFrame() {
+  if (!liveReady || !started || !video.videoWidth) return;
+  const c = liveSendFrame.c ||= document.createElement("canvas"); c.width = 640; c.height = Math.round(640 * video.videoHeight / video.videoWidth);
+  c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
+  liveSend({ realtimeInput: { video: { data: c.toDataURL("image/jpeg", 0.6).split(",")[1], mimeType: "image/jpeg" } } });
+}
+function liveConnect() {
+  const key = $("geminiKey").value.trim();
+  liveReady = false;
+  ws = new WebSocket("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=" + encodeURIComponent(key));
+  ws.onopen = () => { log("live: connecting " + LIVE_MODELS[liveModelIdx]); liveSend(liveSetup()); };
+  ws.onmessage = async ev => {
+    const m = JSON.parse(typeof ev.data === "string" ? ev.data : await ev.data.text());
+    if (m.setupComplete) { liveReady = true; liveRetry = 0; liveUI(true, "Live. Just talk; interrupt him any time. JARVIS can see your camera."); setOrb("listening", "I'm here, sir."); log("live: ready"); liveSendFrame(); return; }
+    const sc = m.serverContent; if (!sc) return;
+    if (sc.interrupted) { stopPlayback(); setOrb("listening"); }
+    if (sc.inputTranscription?.text) { if (!liveUserBubble) liveUserBubble = addChat("me", ""); liveUserBubble.textContent += sc.inputTranscription.text; setOrb(orbState, liveUserBubble.textContent); }
+    if (sc.outputTranscription?.text) { liveUserBubble = null; if (!liveAiBubble) liveAiBubble = addChat("ai", ""); liveAiBubble.textContent += sc.outputTranscription.text; setOrb(orbState, liveAiBubble.textContent); }
+    for (const p of sc.modelTurn?.parts || []) {
+      const d = p.inlineData || p.inline_data;
+      if (d?.data && /audio/.test(d.mimeType || d.mime_type || "audio")) playPcm(d.data, +((d.mimeType || "").match(/rate=(\d+)/)?.[1] || 24000));
+    }
+    if (sc.turnComplete) { liveAiBubble = null; liveUserBubble = null; }
+  };
+  ws.onclose = ev => {
+    log(`live: closed ${ev.code} ${ev.reason.slice(0, 80)}`);
+    const wasReady = liveReady; liveReady = false;
+    if (!liveOn) return;
+    if (!wasReady) {                         // setup was refused: try the other message shape, then the next model
+      if (liveShape === 0) liveShape = 1; else { liveShape = 0; liveModelIdx++; }
+      if (liveModelIdx >= LIVE_MODELS.length) { liveStop(); liveUI(false, "Couldn't start Live: " + (ev.reason || "check your Gemini key") ); liveModelIdx = 0; return; }
+      return liveConnect();
+    }
+    if (liveRetry++ < 5) { liveUI(true, "Reconnecting…"); setTimeout(() => liveOn && liveConnect(), 800); }   // sessions time out; pick right back up
+    else { liveStop(); liveUI(false, "Live disconnected: " + ev.reason); }
+  };
+}
+async function liveStart() {
+  if (!$("geminiKey").value.trim()) {
+    document.querySelector("details").open = true; $("geminiKey").focus();
+    liveUI(false, "Paste your free Gemini key below first (aistudio.google.com/apikey), then tap Go Live."); return;
+  }
+  if (!started) { $("start").click(); }
+  liveOn = true; liveUI(true, "Connecting…");
+  wantHandsFree = false; $("handsfree").checked = false; pauseListening(); if (sess) stopListening();   // Live uses the mic itself
+  speechSynthesis?.cancel();
+  try {
+    liveOut = new (window.AudioContext || window.webkitAudioContext)(); await liveOut.resume();
+    liveAnalyser = liveOut.createAnalyser(); liveAnalyser.fftSize = 256; liveAnalyser.connect(liveOut.destination);
+    analyser = liveAnalyser;                                            // orb follows JARVIS's real voice
+    await liveStartMic();
+  } catch (e) { liveStop(); liveUI(false, "Microphone problem: " + e.message); return; }
+  liveConnect();
+  liveVideoTimer = setInterval(liveSendFrame, 1000);                   // JARVIS sees one frame per second
+  store.set("liveAuto", true);
+}
+function liveStop() {
+  liveOn = false; liveReady = false; clearInterval(liveVideoTimer);
+  try { ws?.close(); } catch {} ws = null; stopPlayback();
+  liveMic?.getTracks().forEach(t => t.stop()); liveMic = null;
+  try { liveIn?.close(); } catch {} try { liveOut?.close(); } catch {}
+  analyser = null; liveUI(false, "Live mode: a real-time voice conversation where JARVIS watches your camera (like Gemini Live). Needs your free Gemini key.");
+  setOrb("idle", "");
+}
+$("geminiKey").addEventListener("change", () => { if ($("geminiKey").value.trim() && !liveOn) liveStart(); });
+$("live").onclick = () => { if (liveOn) { liveStop(); store.set("liveAuto", false); } else liveStart(); };
+
 // ---------- faces ----------
 async function register() {
   const name = $("faceName").value.trim();
@@ -931,6 +1049,7 @@ $("start").onclick = async () => {
   for (const k of active) await ensure(k);
   setStatus("Running. Turn modes on and off with the buttons.");
   loop();
+  if (store.get("liveAuto", true) && $("geminiKey").value.trim() && !liveOn) liveStart();   // go straight into Live
 };
 renderModes(); renderKnown();
 </script>
