@@ -141,7 +141,7 @@
 
 <script type="module">
 import { FilesetResolver, ObjectDetector, GestureRecognizer, PoseLandmarker, FaceLandmarker,
-         FaceDetector, ImageEmbedder, ImageClassifier, DrawingUtils }
+         FaceDetector, ImageEmbedder, ImageClassifier, ImageSegmenter, DrawingUtils }
   from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
 const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
@@ -154,10 +154,14 @@ const MODELS = {
   faces:   M + "face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
   embed:   M + "image_embedder/mobilenet_v3_small/float32/1/mobilenet_v3_small.tflite",
   classify: M + "image_classifier/efficientnet_lite0/float32/1/efficientnet_lite0.tflite",
+  seg:     M + "image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite",
 };
 const MODES = [
   ["objects", "Objects", "1"], ["faces", "Faces", "2"], ["hands", "Hands", "3"],
   ["pose", "Body pose", "4"], ["mesh", "Face mesh", "5"], ["expr", "Expressions", "6"], ["motion", "Motion", "M"],
+  ["seg", "Background blur", "7"], ["scene", "Scene", "8"], ["text", "Read text β", "9"], ["qr", "QR & barcodes", "0"],
+  ["gaze", "Gaze & drowsy", "G"], ["draw", "Air draw", "D"], ["workout", "Workout reps", "W"], ["depth", "Depth β", "P"],
+  ["filter", "Filter: off", "F"],
 ];
 const $ = id => document.getElementById(id);
 const out = $("out"), ctx = out.getContext("2d");
@@ -178,13 +182,14 @@ function renderModes() {
   $("modes").innerHTML = "";
   for (const [key, name, k] of MODES) {
     const b = document.createElement("button");
-    b.innerHTML = `${name} <kbd>${k}</kbd>`;
-    b.className = active.has(key) ? "on" : "";
+    b.innerHTML = `${key === "filter" ? "Filter: " + FILTERS[filterIdx].name : name} <kbd>${k}</kbd>`;
+    b.className = (key === "filter" ? filterIdx > 0 : active.has(key)) ? "on" : "";
     b.onclick = () => toggle(key);
     $("modes").appendChild(b);
   }
 }
 function toggle(key) {
+  if (key === "filter") { filterIdx = (filterIdx + 1) % FILTERS.length; store.set("filter", filterIdx); renderModes(); return; }
   active.has(key) ? active.delete(key) : active.add(key);
   store.set("modes", [...active]); renderModes(); ensure(key);
 }
@@ -320,7 +325,7 @@ async function make(cls, path, extra = {}, mode = "VIDEO") {
   }
 }
 async function ensure(key) {
-  if (key === "motion" || models[key] || loading[key] || !vision) return;   // models load once the camera starts
+  if (key === "motion" || key === "filter" || models[key] || loading[key] || !vision) return;   // models load once the camera starts
   loading[key] = true; setStatus(`Loading ${key} model…`);
   try {
     if (key === "objects") {
@@ -331,7 +336,15 @@ async function ensure(key) {
       if (!models.hands) models.hands = await make(GestureRecognizer, MODELS.hands, { numHands: 2 });
     }
     if (key === "hands" && !models.hands) models.hands = await make(GestureRecognizer, MODELS.hands, { numHands: 2 });
-    if (key === "pose")    models.pose    = await make(PoseLandmarker, MODELS.pose, { numPoses: 2 });
+    if ((key === "pose" || key === "workout") && !models.pose) models.pose = await make(PoseLandmarker, MODELS.pose, { numPoses: 2 });
+    if (key === "workout") models.workout = models.pose;
+    if (key === "draw") { if (!models.hands) models.hands = await make(GestureRecognizer, MODELS.hands, { numHands: 2 }); models.draw = models.hands; }
+    if (key === "seg") models.seg = await make(ImageSegmenter, MODELS.seg, { outputConfidenceMasks: true, outputCategoryMask: false });
+    if (key === "scene") models.scene = await make(ImageClassifier, MODELS.classify, { maxResults: 3, scoreThreshold: 0.1 }, "IMAGE");
+    if (key === "gaze") { if (!models.mesh) models.mesh = await make(FaceLandmarker, MODELS.mesh, { numFaces: 2, outputFaceBlendshapes: true }); models.gaze = models.mesh; }
+    if (key === "text") await getOcr();
+    if (key === "qr") await getQr();
+    if (key === "depth") await getDepth();
     if ((key === "mesh" || key === "expr") && !models.mesh) models.mesh = await make(FaceLandmarker, MODELS.mesh, { numFaces: 2, outputFaceBlendshapes: true });
     if (key === "expr") models.expr = models.mesh;
     if (key === "faces") {
@@ -424,6 +437,166 @@ function motion() {
     box(minX * sx, minY * sy, (maxX - minX) * sx, (maxY - minY) * sy, "#ff4d4d"); label("MOTION", W() - 10, 30, "#ff4d4d"); }
 }
 
+// =================== EXTRA VISION MODES ===================
+const X = { scene: [], text: "", words: [], codes: [], gaze: "", squats: 0, raises: 0, strokes: [], depth: null };
+const FILTERS = [
+  { name: "off", css: "" }, { name: "Night vision", css: "grayscale(1) sepia(1) hue-rotate(70deg) saturate(5) brightness(1.3) contrast(1.2)" },
+  { name: "Thermal", css: "", thermal: true }, { name: "Comic", css: "contrast(1.6) saturate(2.2)" },
+  { name: "Matrix", css: "grayscale(1) sepia(1) hue-rotate(80deg) saturate(8) brightness(0.9) contrast(1.4)" },
+  { name: "Noir", css: "grayscale(1) contrast(1.5)" } ];
+let filterIdx = Math.min(store.get("filter", 0), FILTERS.length - 1);
+const work = document.createElement("canvas"), wctx = work.getContext("2d", { willReadFrequently: true });
+// --- video frame with filters + background blur ---
+const maskC = document.createElement("canvas"), personC = document.createElement("canvas"); let segReady = false;
+function setSegMask(f, w, h) {
+  maskC.width = w; maskC.height = h; const mc = maskC.getContext("2d"), img = mc.createImageData(w, h);
+  for (let i = 0; i < f.length; i++) { const a = f[i] < 0.35 ? 0 : f[i] > 0.75 ? 255 : (f[i] - 0.35) / 0.4 * 255; img.data[i * 4 + 3] = a; }
+  mc.putImageData(img, 0, 0); segReady = true;
+}
+const THERMAL = (() => { const lut = new Uint8ClampedArray(256 * 3);
+  const stops = [[0, 0, 0, 40], [60, 60, 0, 140], [120, 200, 0, 90], [180, 255, 140, 0], [230, 255, 230, 60], [255, 255, 255, 255]];
+  for (let v = 0; v < 256; v++) { let i = 0; while (stops[i + 1][0] < v) i++; const [a0, ...c0] = stops[i], [a1, ...c1] = stops[i + 1], k = (v - a0) / Math.max(1, a1 - a0);
+    for (let j = 0; j < 3; j++) lut[v * 3 + j] = c0[j] + (c1[j] - c0[j]) * k; } return lut; })();
+function drawVideoFrame() {
+  const f = FILTERS[filterIdx];
+  if (active.has("seg") && segReady) {
+    ctx.filter = (f.css ? f.css + " " : "") + "blur(14px)"; ctx.drawImage(video, 0, 0, W(), H());
+    personC.width = W(); personC.height = H(); const pc = personC.getContext("2d");
+    pc.filter = f.css || "none"; pc.drawImage(video, 0, 0, W(), H()); pc.filter = "none";
+    pc.globalCompositeOperation = "destination-in"; pc.drawImage(maskC, 0, 0, W(), H()); pc.globalCompositeOperation = "source-over";
+    ctx.filter = "none"; ctx.drawImage(personC, 0, 0, W(), H());
+  } else { ctx.filter = f.css || "none"; ctx.drawImage(video, 0, 0, W(), H()); ctx.filter = "none"; }
+  if (f.thermal) {
+    const img = ctx.getImageData(0, 0, W(), H()), d = img.data;
+    for (let i = 0; i < d.length; i += 4) { const v = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8; d[i] = THERMAL[v * 3]; d[i + 1] = THERMAL[v * 3 + 1]; d[i + 2] = THERMAL[v * 3 + 2]; }
+    ctx.putImageData(img, 0, 0);
+  }
+}
+function grab(width) { work.width = width; work.height = Math.round(width * video.videoHeight / video.videoWidth); wctx.drawImage(video, 0, 0, work.width, work.height); return work; }
+// --- slow background jobs (each runs on its own timer so the video stays smooth) ---
+const jobBusy = {};
+async function every(name, ms, fn) { const now = performance.now(); if (jobBusy[name] || now - (jobBusy[name + "T"] || 0) < ms) return;
+  jobBusy[name] = true; jobBusy[name + "T"] = now; try { await fn(); } catch (e) { log(name + ": " + e.message); } jobBusy[name] = false; }
+// Scene (what kind of place / main thing)
+function runScene() { every("scene", 1200, async () => {
+  const c = models.scene.classify(grab(224)).classifications[0]?.categories || [];
+  X.scene = c.slice(0, 3).map(x => ({ name: x.categoryName.split(",")[0], score: x.score })); }); }
+// Read text (OCR)
+let ocr = null;
+async function getOcr() { if (ocr) return ocr; setStatus("Loading text reader (first time ≈15 MB)…");
+  const T = (await import("https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.esm.min.js")).default;
+  ocr = await T.createWorker("eng"); models.text = true; setStatus("Text reader ready."); return ocr; }
+function runOcr() { every("text", 2500, async () => {
+  const c = grab(960), sx = video.videoWidth / c.width;
+  const { data } = await ocr.recognize(c, {}, { blocks: true, text: true });
+  const words = [];
+  const walk = o => { if (!o) return; if (o.words) for (const w of o.words) if (w.confidence > 60 && w.text.trim().length > 1) words.push(w);
+    for (const k of ["blocks", "paragraphs", "lines"]) if (o[k]) o[k].forEach(walk); };
+  if (data.words) data.words.forEach(w => w.confidence > 60 && w.text.trim().length > 1 && words.push(w)); else walk(data);
+  X.words = words.map(w => ({ t: w.text, x: w.bbox.x0 * sx, y: w.bbox.y0 * sx, w: (w.bbox.x1 - w.bbox.x0) * sx, h: (w.bbox.y1 - w.bbox.y0) * sx }));
+  X.text = X.words.length ? X.words.map(w => w.t).join(" ") : ""; }); }
+// QR codes & barcodes
+let qrDetector = null;
+async function getQr() {
+  if ("BarcodeDetector" in window) { try { qrDetector = new BarcodeDetector(); models.qr = true; return; } catch {} }
+  if (!window.jsQR) await new Promise((ok, bad) => { const sc = document.createElement("script"); sc.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"; sc.onload = ok; sc.onerror = bad; document.head.appendChild(sc); });
+  models.qr = true;
+}
+const announced = new Set();
+function runQr() { every("qr", 400, async () => {
+  let codes = [];
+  if (qrDetector) codes = (await qrDetector.detect(video)).map(c => ({ value: c.rawValue, pts: c.cornerPoints }));
+  else { const c = grab(640), sx = video.videoWidth / c.width, img = wctx.getImageData(0, 0, c.width, c.height);
+    const r = window.jsQR(img.data, c.width, c.height); if (r) { const L = r.location;
+      codes = [{ value: r.data, pts: [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner].map(p => ({ x: p.x * sx, y: p.y * sx })) }]; } }
+  X.codes = codes;
+  for (const c of codes) if (!announced.has(c.value)) { announced.add(c.value); say(/^https?:/i.test(c.value) ? "I see a QR code with a link." : "I see a code: " + c.value.slice(0, 60)); } }); }
+// Depth (beta, heavy)
+let depthPipe = null;
+async function getDepth() { if (depthPipe) return; setStatus("Loading depth model (first time ≈30 MB)…");
+  const { pipeline } = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm");
+  const ad = navigator.gpu && await navigator.gpu.requestAdapter().catch(() => null);
+  depthPipe = await pipeline("depth-estimation", "onnx-community/depth-anything-v2-small",
+    ad ? { device: "webgpu", dtype: ad.features.has("shader-f16") ? "fp16" : "fp32" } : { device: "wasm", dtype: "q8" });
+  models.depth = true; setStatus("Depth ready."); }
+function runDepth() { every("depth", 1500, async () => {
+  const { RawImage } = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm");
+  const out = await depthPipe(RawImage.fromCanvas(grab(256)));
+  X.depth = out.depth.toCanvas(); }); }
+// Gaze, head direction & drowsiness (uses the face mesh)
+let eyesClosedSince = 0, drowsyWarned = 0;
+function drawGaze(now) {
+  const lm = R.mesh?.faceLandmarks?.[0], bs = R.mesh?.faceBlendshapes?.[0]?.categories; if (!lm || !bs) { X.gaze = ""; return; }
+  const g = n => bs.find(c => c.categoryName === n)?.score || 0;
+  const l = lm[234], r = lm[454], nose = lm[1], top = lm[10], chin = lm[152];
+  const yaw = (nose.x - (l.x + r.x) / 2) / Math.max(0.01, Math.abs(r.x - l.x));
+  const pitch = (nose.y - (top.y + chin.y) / 2) / Math.max(0.01, Math.abs(chin.y - top.y));
+  const eyeH = (g("eyeLookOutLeft") + g("eyeLookInRight") - g("eyeLookInLeft") - g("eyeLookOutRight")) / 2;
+  const eyeV = (g("eyeLookUpLeft") + g("eyeLookUpRight") - g("eyeLookDownLeft") - g("eyeLookDownRight")) / 2;
+  let dir = "at the screen";
+  if (yaw > 0.12 || eyeH > 0.35) dir = "to the left"; else if (yaw < -0.12 || eyeH < -0.35) dir = "to the right";
+  else if (pitch > 0.12 || eyeV < -0.35) dir = "down"; else if (pitch < -0.05 || eyeV > 0.35) dir = "up";
+  const closed = g("eyeBlinkLeft") > 0.55 && g("eyeBlinkRight") > 0.55;
+  if (closed) { eyesClosedSince ||= now; } else eyesClosedSince = 0;
+  const drowsy = eyesClosedSince && now - eyesClosedSince > 1500;
+  X.gaze = drowsy ? "eyes closed (drowsy)" : "looking " + dir;
+  let minY = 1, maxX = 0; for (const p of lm) { if (p.y < minY) minY = p.y; if (p.x > maxX) maxX = p.x; }
+  label(drowsy ? "😴 Eyes closed!" : "👀 Looking " + dir, maxX * W(), Math.max(46, minY * H() - 30), drowsy ? "#ff4d4d" : "#9ad1ff");
+  if (drowsy) { banner("😴 WAKE UP!", "#ff4d4d"); if (now - drowsyWarned > 10000) { drowsyWarned = now; say("Wake up, sir."); } }
+}
+// Air draw: point with your index finger to draw, open hand to erase
+let drawing = null, openSince = 0;
+function drawAir(now) {
+  for (const h of handSmooth) {
+    const tip = h.cur[8];
+    if (h.g === "Pointing up" || h.g === "Hand") { if (!drawing) { drawing = []; X.strokes.push(drawing); } const last = drawing[drawing.length - 1];
+      if (!last || Math.hypot(last.x - tip.x, last.y - tip.y) > 0.004) drawing.push({ x: tip.x, y: tip.y }); }
+    else drawing = null;
+    if (h.g === "Open hand") { openSince ||= now; if (now - openSince > 800) { X.strokes = []; drawing = null; } } else openSince = 0;
+    break;
+  }
+  if (!handSmooth.length) drawing = null;
+  ctx.save(); ctx.lineCap = ctx.lineJoin = "round"; ctx.shadowColor = "#2fd4ff"; ctx.shadowBlur = 14; ctx.strokeStyle = "#bff3ff"; ctx.lineWidth = 6;
+  for (const st of X.strokes) { if (st.length < 2) continue; ctx.beginPath(); st.forEach((p, i) => i ? ctx.lineTo(p.x * W(), p.y * H()) : ctx.moveTo(p.x * W(), p.y * H())); ctx.stroke(); }
+  ctx.restore();
+}
+// Workout reps (squats + both-arms-up raises)
+let squatDown = false, armsUp = false;
+const angle = (a, b, c) => { const v1 = [a.x - b.x, a.y - b.y], v2 = [c.x - b.x, c.y - b.y];
+  return Math.acos(Math.max(-1, Math.min(1, (v1[0] * v2[0] + v1[1] * v2[1]) / (Math.hypot(...v1) * Math.hypot(...v2) + 1e-6)))) * 180 / Math.PI; };
+function runWorkout() {
+  const lm = R.pose?.landmarks?.[0]; if (!lm) return;
+  const knee = (angle(lm[23], lm[25], lm[27]) + angle(lm[24], lm[26], lm[28])) / 2, visible = (lm[25].visibility ?? 1) > 0.5 && (lm[26].visibility ?? 1) > 0.5;
+  if (visible) { if (knee < 105) squatDown = true; else if (knee > 160 && squatDown) { squatDown = false; X.squats++; if (!liveOn) say(String(X.squats)); } }
+  const up = lm[15].y < lm[0].y && lm[16].y < lm[0].y;
+  if (up && !armsUp) { armsUp = true; X.raises++; } else if (!up && lm[15].y > lm[11].y && lm[16].y > lm[12].y) armsUp = false;
+}
+function panel(lines, x, y, color = "#e6edf3") {
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.font = "bold 14px -apple-system,sans-serif";
+  const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 16, h = lines.length * 19 + 10;
+  ctx.fillStyle = "rgba(11,15,20,.72)"; ctx.fillRect(x, y, w, h); ctx.fillStyle = color;
+  lines.forEach((l, i) => ctx.fillText(l, x + 8, y + 20 + i * 19)); ctx.restore();
+}
+function drawExtras(now) {
+  if (active.has("scene") && models.scene) runScene();
+  if (active.has("text") && ocr) runOcr();
+  if (active.has("qr") && models.qr) runQr();
+  if (active.has("depth") && depthPipe) runDepth();
+  if (active.has("workout") && models.pose) runWorkout();
+  if (active.has("gaze") && R.mesh) drawGaze(now);
+  if (active.has("draw")) drawAir(now);
+  if (active.has("text")) for (const w of X.words) { ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 2; ctx.strokeRect(w.x, w.y, w.w, w.h); }
+  if (active.has("qr")) for (const c of X.codes) {
+    ctx.strokeStyle = "#3ddc84"; ctx.lineWidth = 4; ctx.beginPath(); c.pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.closePath(); ctx.stroke();
+    const p = c.pts[0]; label("🔳 " + c.value.slice(0, 48), p.x + 200, p.y, "#3ddc84"); }
+  let y = 28;
+  if (active.has("scene") && X.scene.length) { panel(["Scene: " + X.scene.map(c => `${c.name} ${Math.round(c.score * 100)}%`).join(" · ")], 8, y); y += 34; }
+  if (active.has("workout")) { panel([`🏋️ Squats: ${X.squats}`, `🙌 Arm raises: ${X.raises}`], 8, y, "#ffd166"); y += 52; }
+  if (active.has("text") && X.text) panel(["📖 " + X.text.slice(0, 90)], 8, H() - 64, "#ffd166");
+  if (active.has("depth") && X.depth) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const w = W() * 0.32, h = w * X.depth.height / X.depth.width;
+    ctx.globalAlpha = 0.9; ctx.drawImage(X.depth, W() - w - 8, H() - h - 8, w, h); ctx.restore(); panel(["Depth: bright = near"], W() - w - 8, H() - h - 40); }
+  if (!active.has("draw") && X.strokes.length) X.strokes = [];
+}
 // ---------- main loop ----------
 // The video is drawn every frame (smooth). The AI models run one at a time, taking turns,
 // only as often as this computer can keep up, and pause while the on-device brain is thinking.
@@ -436,9 +609,10 @@ function runOneModel(t) {
   const jobs = [];
   if (active.has("objects") && models.objects) jobs.push("objects");
   if (active.has("faces") && models.faces) jobs.push("faces");
-  if ((active.has("hands") || active.has("objects")) && models.hands) jobs.push("hands");
-  if (active.has("pose") && models.pose) jobs.push("pose");
-  if ((active.has("mesh") || active.has("expr")) && models.mesh) jobs.push("mesh");
+  if ((active.has("hands") || active.has("objects") || active.has("draw")) && models.hands) jobs.push("hands");
+  if ((active.has("pose") || active.has("workout")) && models.pose) jobs.push("pose");
+  if (active.has("seg") && models.seg) jobs.push("seg");
+  if ((active.has("mesh") || active.has("expr") || active.has("gaze")) && models.mesh) jobs.push("mesh");
   if (!jobs.length) return false;
   const job = jobs[turn++ % jobs.length];
   if (job === "objects") R.objects = models.objects.detectForVideo(video, t).detections;
@@ -449,6 +623,7 @@ function runOneModel(t) {
   }
   if (job === "hands") { R.hands = models.hands.recognizeForVideo(video, t); if (active.has("objects") && turn % 3 === 0) heldObjects(R.hands, true); }
   if (job === "pose") R.pose = models.pose.detectForVideo(video, t);
+  if (job === "seg") { const r = models.seg.segmentForVideo(video, t); const m = r.confidenceMasks?.[0]; if (m) setSegMask(m.getAsFloat32Array(), m.width, m.height); r.close?.(); }
   if (job === "mesh") R.mesh = models.mesh.detectForVideo(video, t);
   return true;
 }
@@ -562,7 +737,7 @@ function loop() {
   if (video.readyState >= 2) {
     if (out.width !== video.videoWidth) { out.width = video.videoWidth; out.height = video.videoHeight; }
     mirror ? ctx.setTransform(-1, 0, 0, 1, W(), 0) : ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(video, 0, 0, W(), H());
+    drawVideoFrame();
     const t = performance.now(); frameNo++;
     const brainBusy = busy && $("brain").value.startsWith("local");    // on-device brain needs the GPU
     if (!brainBusy && t >= nextAI) {
@@ -573,6 +748,7 @@ function loop() {
       }
     }
     drawResults();
+    drawExtras(t);
     if (active.has("motion") && frameNo % 2 === 0) motion();
     fps = 0.9 * fps + 0.1 * (1000 / Math.max(1, t - last)); last = t;
     if (t - aiT > 1000) { aiRate = aiCount * 1000 / (t - aiT); aiCount = 0; aiT = t; fpsShown = fps; }
@@ -599,6 +775,11 @@ function sceneText() {
   if (active.has("pose") && seen.pose.length) parts.push("Body: " + seen.pose.join(", "));
   if ((active.has("mesh") || active.has("expr")) && seen.expr.length) parts.push("Facial expression: " + seen.expr.join(", "));
   if (active.has("motion")) parts.push("Motion: " + (seen.motion ? "yes" : "no"));
+  if (active.has("scene") && X.scene.length) parts.push("Scene looks like: " + X.scene.map(c => c.name).join(", "));
+  if (active.has("text") && X.text) parts.push("Text visible: \"" + X.text.slice(0, 200) + "\"");
+  if (active.has("qr") && X.codes.length) parts.push("Codes: " + X.codes.map(c => c.value).join(", "));
+  if (active.has("gaze") && X.gaze) parts.push("Gaze: " + X.gaze);
+  if (active.has("workout")) parts.push(`Workout: ${X.squats} squats, ${X.raises} arm raises`);
   return parts.join(". ") || "No detectors are switched on.";
 }
 const SYSTEM = "You are JARVIS, Christian's witty, warm and genuinely helpful British AI assistant, talking with him out loud. " +
