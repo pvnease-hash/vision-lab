@@ -43,6 +43,11 @@
   label.row { display:flex; gap:8px; align-items:center; margin-top:6px; }
   label.row input { width:auto; }
   @media (prefers-reduced-motion: reduce) { #talk.listening { animation:none; } }
+  #orb { position:fixed; right:16px; bottom:16px; z-index:50; width:140px; display:flex; flex-direction:column; align-items:center; gap:6px; touch-action:none; user-select:none; -webkit-user-select:none; cursor:grab; }
+  #orb.dragging { cursor:grabbing; }
+  #orb canvas { width:140px; height:140px; background:transparent; border-radius:50%; filter:drop-shadow(0 0 18px rgba(47,212,255,.35)); }
+  #orbcap { max-width:240px; font-size:12px; line-height:1.35; text-align:center; color:#cfefff; background:rgba(11,15,20,.82); border:1px solid #1f3a4a; border-radius:10px; padding:6px 10px; display:none; }
+  #orbstate { font:600 10px/1 -apple-system,sans-serif; letter-spacing:2px; color:#2fd4ff; text-transform:uppercase; }
   @media (pointer:coarse) { button { min-height:44px; } button kbd { display:none; } input { font-size:16px; } }
   @media (max-width:700px) { header { padding:10px 12px; } main { padding:0 12px 16px; } aside { flex:1 1 100%; } #stage { flex:1 1 100%; } }
 </style>
@@ -103,6 +108,12 @@
     </div>
   </aside>
 </main>
+
+<div id="orb" title="Tap to talk to JARVIS · drag to move">
+  <canvas id="orbc" width="280" height="280"></canvas>
+  <div id="orbstate">JARVIS</div>
+  <div id="orbcap"></div>
+</div>
 
 <script type="module">
 import { FilesetResolver, ObjectDetector, GestureRecognizer, PoseLandmarker, FaceLandmarker,
@@ -171,10 +182,10 @@ function fillVoices() {
   sel.value = saved && vs.some(v => v.name === saved) ? saved : pickDefaultVoice(vs)?.name || "";
 }
 if (window.speechSynthesis) { fillVoices(); speechSynthesis.onvoiceschanged = fillVoices; }
-function sayDone() { speaking = false; resumeListening(); }
+function sayDone() { speaking = false; setOrb("idle"); resumeListening(); }
 async function say(text) {
-  if (!voiceOn) return;
-  speaking = true; pauseListening();
+  if (!voiceOn) { setOrb("idle", text); return; }
+  speaking = true; pauseListening(); setOrb("speaking", text);
   const elKey = $("elKey").value.trim(), elVoice = $("elVoice").value.trim();
   if (elKey && elVoice) {
     try {
@@ -182,16 +193,90 @@ async function say(text) {
         method: "POST", headers: { "xi-api-key": elKey, "content-type": "application/json" },
         body: JSON.stringify({ text, model_id: "eleven_flash_v2_5" }) });
       if (!r.ok) throw new Error((await r.text()).slice(0, 120));
-      player.src = URL.createObjectURL(await r.blob()); player.onended = sayDone; await player.play(); return;
+      player.src = URL.createObjectURL(await r.blob()); player.onended = sayDone; if (actx) hookAnalyser(); await player.play(); return;
     } catch (e) { setStatus("ElevenLabs voice failed, using built-in voice: " + e.message); }
   }
   if (!window.speechSynthesis) return sayDone();
   const u = new SpeechSynthesisUtterance(text);
   const v = speechSynthesis.getVoices().find(v => v.name === $("voicePick").value);
   if (v) { u.voice = v; u.lang = v.lang; }
-  u.onend = u.onerror = sayDone;
+  u.onend = u.onerror = sayDone; u.onboundary = () => { orbKick = 1; };
   speechSynthesis.speak(u);
 }
+
+// ---------- floating JARVIS orb ----------
+const orb = $("orb"), oc = $("orbc"), og = oc.getContext("2d");
+let orbState = "idle", orbLevel = 0, orbKick = 0, orbSpin = 0, analyser = null, actx = null, capTimer;
+function setOrb(state, caption) {
+  orbState = state;
+  $("orbstate").textContent = { idle: "JARVIS", listening: "Listening", thinking: "Thinking", speaking: "Speaking" }[state];
+  if (caption !== undefined) {
+    clearTimeout(capTimer); $("orbcap").textContent = caption; $("orbcap").style.display = caption ? "block" : "none";
+    if (state === "idle" && caption) capTimer = setTimeout(() => $("orbcap").style.display = "none", 6000);
+  }
+}
+function hookAnalyser() {           // real audio levels for the ElevenLabs voice
+  try {
+    if (!actx) { actx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = actx.createMediaElementSource(player); analyser = actx.createAnalyser(); analyser.fftSize = 256;
+      src.connect(analyser); analyser.connect(actx.destination); }
+    if (actx.state === "suspended") actx.resume();
+  } catch {}
+}
+const buf = new Uint8Array(128);
+function drawOrb(t) {
+  const W2 = oc.width, c = W2 / 2, R = W2 * 0.27;
+  og.clearRect(0, 0, W2, W2);
+  // target level per state
+  let target = 0.05;
+  if (orbState === "listening") target = 0.35 + 0.25 * Math.sin(t / 250);
+  if (orbState === "thinking") target = 0.2;
+  if (orbState === "speaking") {
+    if (analyser && !player.paused) { analyser.getByteTimeDomainData(buf); let sum = 0; for (const v of buf) sum += ((v - 128) / 128) ** 2; target = Math.min(1, Math.sqrt(sum / buf.length) * 5); }
+    else target = 0.35 + 0.45 * orbKick + 0.2 * Math.abs(Math.sin(t / 90) * Math.sin(t / 37));
+  }
+  orbKick *= 0.9; orbLevel += (target - orbLevel) * 0.25;
+  orbSpin += orbState === "thinking" ? 0.08 : 0.01;
+  const hue = orbState === "listening" ? "255,90,90" : "47,212,255";
+  // radial bars
+  const N = 56;
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2 + orbSpin * 0.5;
+    const wob = 0.5 + 0.5 * Math.sin(i * 1.7 + t / 120) * Math.sin(i * 0.6 - t / 210);
+    const len = 6 + orbLevel * 46 * (0.35 + 0.65 * wob);
+    og.strokeStyle = `rgba(${hue},${0.35 + 0.6 * orbLevel})`; og.lineWidth = 4; og.lineCap = "round";
+    og.beginPath(); og.moveTo(c + Math.cos(a) * (R + 10), c + Math.sin(a) * (R + 10));
+    og.lineTo(c + Math.cos(a) * (R + 10 + len), c + Math.sin(a) * (R + 10 + len)); og.stroke();
+  }
+  // segmented ring
+  og.lineWidth = 5;
+  for (let k = 0; k < 6; k++) {
+    const a0 = orbSpin * (orbState === "thinking" ? 3 : 1) + k * Math.PI / 3;
+    og.strokeStyle = `rgba(${hue},.9)`; og.beginPath(); og.arc(c, c, R, a0, a0 + Math.PI / 4.5); og.stroke();
+  }
+  // core
+  const g = og.createRadialGradient(c, c, 2, c, c, R * 0.85);
+  g.addColorStop(0, "rgba(255,255,255,.95)"); g.addColorStop(0.35, `rgba(${hue},${0.75 + 0.25 * orbLevel})`); g.addColorStop(1, `rgba(${hue},0)`);
+  og.fillStyle = g; og.beginPath(); og.arc(c, c, R * (0.62 + 0.25 * orbLevel), 0, Math.PI * 2); og.fill();
+  requestAnimationFrame(drawOrb);
+}
+requestAnimationFrame(drawOrb);
+// drag anywhere, tap to talk; position remembered
+(() => {
+  const pos = store.get("orbPos", null);
+  if (pos) { orb.style.left = pos.x + "px"; orb.style.top = pos.y + "px"; orb.style.right = orb.style.bottom = "auto"; }
+  let sx, sy, ox, oy, moved = false, down = false;
+  orb.addEventListener("pointerdown", e => { down = true; moved = false; sx = e.clientX; sy = e.clientY; const r = orb.getBoundingClientRect(); ox = r.left; oy = r.top; orb.setPointerCapture(e.pointerId); });
+  orb.addEventListener("pointermove", e => {
+    if (!down) return; const dx = e.clientX - sx, dy = e.clientY - sy;
+    if (!moved && Math.hypot(dx, dy) < 6) return;
+    moved = true; orb.classList.add("dragging");
+    const x = Math.max(0, Math.min(innerWidth - orb.offsetWidth, ox + dx)), y = Math.max(0, Math.min(innerHeight - 160, oy + dy));
+    orb.style.left = x + "px"; orb.style.top = y + "px"; orb.style.right = orb.style.bottom = "auto";
+  });
+  orb.addEventListener("pointerup", () => { down = false; orb.classList.remove("dragging");
+    if (moved) { const r = orb.getBoundingClientRect(); store.set("orbPos", { x: r.left, y: r.top }); } else $("talk").click(); });
+})();
 
 // ---------- model loading (only what you turn on) ----------
 async function make(cls, path, extra = {}, mode = "VIDEO") {
@@ -410,7 +495,11 @@ async function localEngine(kind) {
   const id = (kind === "local-big" ? "Llama-3.2-1B-Instruct-" : "Qwen2.5-0.5B-Instruct-") + f16 + "-MLC";
   if (llm && llmId === id) return llm;
   setStatus("Downloading JARVIS brain (first time only)…");
-  llm = await webllm.CreateMLCEngine(id, { initProgressCallback: r => setStatus(`Brain: ${r.text}`) });
+  const progress = r => setStatus(`Brain: ${r.text}`);
+  try { llm = await webllm.CreateMLCEngine(id, { initProgressCallback: progress }); }
+  catch (e) {   // some browsers refuse the Cache API for big files; IndexedDB works there
+    llm = await webllm.CreateMLCEngine(id, { initProgressCallback: progress, appConfig: { ...webllm.prebuiltAppConfig, cacheBackend: "indexeddb" } });
+  }
   llmId = id; setStatus("JARVIS brain ready."); return llm;
 }
 
@@ -456,7 +545,7 @@ let busy = false;
 async function ask(q) {
   q = q.trim(); if (!q || busy) return;
   busy = true; addChat("me", q); $("question").value = "";
-  const bubble = addChat("ai", "…");
+  const bubble = addChat("ai", "…"); setOrb("thinking", "");
   try {
     let a = command(q);
     if (!a) {
@@ -465,7 +554,7 @@ async function ask(q) {
       while (history.length > 8) history.shift();
     }
     bubble.textContent = a; say(a);
-  } catch (e) { bubble.textContent = "Problem: " + e.message; }
+  } catch (e) { bubble.textContent = "Problem: " + e.message; setOrb("idle", "Problem: " + e.message); }
   busy = false;
 }
 $("ask").onclick = () => ask($("question").value);
@@ -482,17 +571,18 @@ function startRec(continuous) {
     const text = e.results[e.results.length - 1][0].transcript.trim();
     if (pttOnce) { pttOnce = false; ask(text); return; }
     const m = text.match(/\bjarvis\b[,.!?]?\s*(.*)/i);
-    if (m) m[1] ? ask(m[1]) : say("Yes?");
+    if (m) m[1] ? ask(m[1]) : (setOrb("listening", ""), pttOnce = true, say("Yes?"));
   };
   rec.onerror = e => { if (e.error === "not-allowed") { setStatus("Microphone blocked. Allow the mic for this page."); wantHandsFree = false; $("handsfree").checked = false; } };
   rec.onend = () => { listening = false; $("talk").classList.remove("listening"); $("talk").textContent = "🎤 Tap and talk";
+    if (orbState === "listening") setOrb("idle");
     if (wantHandsFree && !speaking) setTimeout(() => startRec(true), 300); };
-  try { rec.start(); listening = true; $("talk").classList.add("listening"); $("talk").textContent = continuous ? "👂 Listening for “Jarvis”…" : "🔴 Listening… tap to stop"; } catch {}
+  try { rec.start(); listening = true; $("talk").classList.add("listening"); $("talk").textContent = continuous ? "👂 Listening for “Jarvis”…" : "🔴 Listening… tap to stop"; if (!continuous) setOrb("listening", ""); } catch {}
 }
 function pauseListening() { if (rec && listening) { try { rec.abort(); } catch {} } }
 function resumeListening() { if (wantHandsFree && !listening) setTimeout(() => startRec(true), 400); }
 $("talk").onclick = () => {
-  player.src = SILENT; player.play().catch(() => {});        // unlock audio on iPhone
+  player.src = SILENT; player.play().catch(() => {}); hookAnalyser();   // unlock audio on iPhone
   if (listening && !wantHandsFree) { rec.stop(); return; }
   if (wantHandsFree) pauseListening();
   pttOnce = true; startRec(false);
