@@ -599,6 +599,7 @@ function finish() {             // a listening session ended: act on what was he
   const s0 = sess; sess = null; uiListening(false);
   if (!s0) return;
   const text = (s0.text || "").trim();
+  if (s0.error && !text) { heard(s0.error); setOrb("idle", s0.error); return; }
   if (s0.mode === "dictate") { heard(text ? "" : "Didn't catch anything."); $("question").focus(); return; }
   if (s0.mode === "ask") { heard(""); if (text) ask(text); else setOrb("idle", "I didn't catch that. Tap and try again."); }
   if (s0.mode === "wake" && wantHandsFree && !speaking) setTimeout(() => wantHandsFree && !sess && listen("wake"), 300);
@@ -652,7 +653,7 @@ function browserListen(s0) {
       browserBroken = true; heard((SR_ERRORS[failed] || failed) + " Switching to on-device recognition…");
       s0.engine = "whisper"; s0.stop = null; whisperListen(s0); return;
     }
-    if (failed) { heard(SR_ERRORS[failed] || ("Speech error: " + failed)); if (failed === "not-allowed") { wantHandsFree = false; $("handsfree").checked = false; } }
+    if (failed) { s0.error = SR_ERRORS[failed] || ("Speech error: " + failed); if (failed === "not-allowed") { wantHandsFree = false; $("handsfree").checked = false; } }
     if (s0.mode !== "wake" && !gotAny && !failed && sess === s0 && !s0.restarted) {   // ended before you spoke (Safari does this) – try once more
       s0.restarted = true; try { rec.start(); return; } catch {}
     }
