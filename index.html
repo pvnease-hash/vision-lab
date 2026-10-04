@@ -31,6 +31,18 @@
   #big { display:none; position:absolute; inset:0; align-items:center; justify-content:center; text-align:center; padding:24px; }
   #big button { text-align:center; font-size:18px; padding:14px 24px; background:var(--on); }
   small { color:var(--muted); }
+  select { width:100%; background:#0b0f14; color:var(--text); border:1px solid #2c3846; border-radius:8px; padding:8px; font:inherit; }
+  #talk { text-align:center; font-size:16px; padding:12px; background:#1d3b2a; border-color:#2e6b47; }
+  #talk.listening { background:#b3261e; border-color:#b3261e; animation:pulse 1s infinite alternate; }
+  @keyframes pulse { from { opacity:1 } to { opacity:.6 } }
+  #chat { max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin:8px 0; }
+  #chat .me { align-self:flex-end; background:#1f3a5f; padding:6px 10px; border-radius:10px 10px 2px 10px; max-width:90%; }
+  #chat .ai { align-self:flex-start; background:#1d2a22; color:#cfe8d0; padding:6px 10px; border-radius:10px 10px 10px 2px; max-width:90%; }
+  details summary { cursor:pointer; color:var(--muted); margin-top:8px; }
+  details > * { margin-top:6px; }
+  label.row { display:flex; gap:8px; align-items:center; margin-top:6px; }
+  label.row input { width:auto; }
+  @media (prefers-reduced-motion: reduce) { #talk.listening { animation:none; } }
   @media (pointer:coarse) { button { min-height:44px; } button kbd { display:none; } input { font-size:16px; } }
   @media (max-width:700px) { header { padding:10px 12px; } main { padding:0 12px 16px; } aside { flex:1 1 100%; } #stage { flex:1 1 100%; } }
 </style>
@@ -60,15 +72,29 @@
       <small id="known"></small>
     </div>
     <div class="card">
-      <h2>Ask Claude about the scene</h2>
-      <input id="question" placeholder="e.g. What am I holding?">
-      <div class="grid" style="margin-top:6px">
-        <button id="ask">Ask <kbd>Enter</kbd></button>
-        <button id="describe">Describe <kbd>C</kbd></button>
+      <h2>JARVIS · talk to it</h2>
+      <button id="talk">🎤 Tap and talk</button>
+      <label class="row"><input type="checkbox" id="handsfree"> Hands-free: start with “Jarvis…”</label>
+      <div id="chat"></div>
+      <div class="grid" style="grid-template-columns:1fr auto">
+        <input id="question" placeholder="Or type: What am I holding?">
+        <button id="ask">Send</button>
       </div>
-      <p id="answer"></p>
-      <input id="apikey" type="password" placeholder="Claude API key (sk-ant-…), optional">
-      <small>Only needed for this box. Saved in this browser only. Billed separately from Claude Pro.</small>
+      <details>
+        <summary>Brain &amp; voice settings</summary>
+        <label for="brain"><small>Brain</small></label>
+        <select id="brain">
+          <option value="local-small">Free · on this device · small (≈0.5 GB download)</option>
+          <option value="local-big">Free · on this device · smarter (≈1 GB download)</option>
+          <option value="claude">Claude · really sees the picture (API key, paid)</option>
+        </select>
+        <input id="apikey" type="password" placeholder="Claude API key (only for the Claude brain)">
+        <label for="voicePick"><small>Voice</small></label>
+        <select id="voicePick"></select>
+        <input id="elKey" type="password" placeholder="ElevenLabs API key (optional, free tier)">
+        <input id="elVoice" placeholder="ElevenLabs voice ID (your JARVIS voice)">
+        <small>Free brains run on your device: they know what the detectors see (objects, faces, gestures) but don't look at the picture itself. Keys stay in this browser only.</small>
+      </details>
     </div>
     <div class="card grid">
       <button id="voice" class="on">Voice <kbd>V</kbd></button>
@@ -108,7 +134,7 @@ const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? 
 let active = new Set(store.get("modes", ["objects", "hands"]));
 let vision, models = {}, loading = {}, voiceOn = true;
 let known = store.get("faces", {});              // name -> [embedding arrays]
-let seen = { objects: [], faces: [], gestures: [] };
+let seen = { objects: [], faces: [], gestures: [], pose: [], expr: [], motion: false };
 let draw, facing = "user", mirror = true, started = false;
 
 // ---------- UI ----------
@@ -132,11 +158,38 @@ function renderKnown() {
   $("known").textContent = names.length ? "Known: " + names.map(n => `${n} (${known[n].length})`).join(", ")
                                         : "No faces registered yet. Register 3–5 times from different angles.";
 }
-function say(text) {
-  if (!voiceOn || !window.speechSynthesis) return;
+// ---------- voice out ----------
+const SILENT = "data:audio/wav;base64,UklGRuwAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YcgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==";
+const player = new Audio(); let speaking = false;
+function pickDefaultVoice(vs) {
+  return vs.find(v => /Jamie/i.test(v.name)) || vs.find(v => /Daniel/i.test(v.name)) || vs.find(v => v.lang === "en-GB") || vs[0];
+}
+function fillVoices() {
+  const vs = speechSynthesis?.getVoices?.() || []; if (!vs.length) return;
+  const saved = store.get("voicePick", null), sel = $("voicePick"); sel.innerHTML = "";
+  vs.filter(v => v.lang.startsWith("en")).forEach(v => { const o = document.createElement("option"); o.value = v.name; o.textContent = `${v.name} (${v.lang})`; sel.appendChild(o); });
+  sel.value = saved && vs.some(v => v.name === saved) ? saved : pickDefaultVoice(vs)?.name || "";
+}
+if (window.speechSynthesis) { fillVoices(); speechSynthesis.onvoiceschanged = fillVoices; }
+function sayDone() { speaking = false; resumeListening(); }
+async function say(text) {
+  if (!voiceOn) return;
+  speaking = true; pauseListening();
+  const elKey = $("elKey").value.trim(), elVoice = $("elVoice").value.trim();
+  if (elKey && elVoice) {
+    try {
+      const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(elVoice)}?output_format=mp3_44100_128`, {
+        method: "POST", headers: { "xi-api-key": elKey, "content-type": "application/json" },
+        body: JSON.stringify({ text, model_id: "eleven_flash_v2_5" }) });
+      if (!r.ok) throw new Error((await r.text()).slice(0, 120));
+      player.src = URL.createObjectURL(await r.blob()); player.onended = sayDone; await player.play(); return;
+    } catch (e) { setStatus("ElevenLabs voice failed, using built-in voice: " + e.message); }
+  }
+  if (!window.speechSynthesis) return sayDone();
   const u = new SpeechSynthesisUtterance(text);
-  const v = speechSynthesis.getVoices().find(v => /Daniel|en-GB/.test(v.name + v.lang));
-  if (v) u.voice = v;
+  const v = speechSynthesis.getVoices().find(v => v.name === $("voicePick").value);
+  if (v) { u.voice = v; u.lang = v.lang; }
+  u.onend = u.onerror = sayDone;
   speechSynthesis.speak(u);
 }
 
@@ -245,7 +298,7 @@ function motion() {
       minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
     }
   }
-  prev = d;
+  prev = d; seen.motion = changed > 150;
   if (changed > 150) { const sx = W() / 160, sy = H() / 90;
     box(minX * sx, minY * sy, (maxX - minX) * sx, (maxY - minY) * sy, "#ff4d4d"); label("MOTION", W() - 10, 30, "#ff4d4d"); }
 }
@@ -300,7 +353,7 @@ function loop() {
       for (const lm of r.landmarks) {
         draw.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#00e5a0", lineWidth: 4 });
         draw.drawLandmarks(lm, { color: "#fff", radius: 3 });
-        if (lm[15].y < lm[0].y && lm[16].y < lm[0].y) banner("🙌 BOTH HANDS UP!");
+        if (lm[15].y < lm[0].y && lm[16].y < lm[0].y) { banner("🙌 BOTH HANDS UP!"); seen.pose = ["both hands raised"]; } else seen.pose = ["standing/sitting in view"];
       }
     }
     if (active.has("mesh") && models.mesh) {
@@ -314,7 +367,7 @@ function loop() {
       if (bs) { const g = n => bs.find(c => c.categoryName === n)?.score || 0; const tags = [];
         if (g("jawOpen") > 0.4) tags.push("Mouth open"); if ((g("mouthSmileLeft") + g("mouthSmileRight")) / 2 > 0.5) tags.push("Smiling");
         if (g("eyeBlinkLeft") > 0.5 && g("eyeBlinkRight") > 0.5) tags.push("Eyes closed"); if (g("browInnerUp") > 0.5) tags.push("Eyebrows up");
-        if (tags.length) banner(tags.join(" · "), "#2fd4ff"); }
+        seen.expr = tags; if (tags.length) banner(tags.join(" · "), "#2fd4ff"); }
     }
     if (active.has("motion")) motion();
 
@@ -325,34 +378,126 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
-// ---------- Claude ----------
-$("apikey").value = store.get("apikey", "");
-$("apikey").onchange = () => store.set("apikey", $("apikey").value.trim());
-async function askClaude(q) {
-  const key = $("apikey").value.trim();
-  if (!key) { $("answer").textContent = "Paste a Claude API key below first (console.anthropic.com → API Keys)."; return; }
-  $("answer").textContent = "Looking…";
-  const c = document.createElement("canvas"); c.width = 960; c.height = Math.round(960 * video.videoHeight / video.videoWidth);
-  c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
-  const img = c.toDataURL("image/jpeg", 0.8).split(",")[1];
-  const ctxText = [...seen.objects, ...seen.faces, ...seen.gestures].join(", ");
-  try {
-    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
-      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01",
-                 "anthropic-dangerous-direct-browser-access": "true" },
-      body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 300,
-        system: "You are JARVIS, a witty AI assistant looking through a webcam. Answer in 1-3 short spoken sentences, no markdown.",
-        messages: [{ role: "user", content: [
-          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: img } },
-          { type: "text", text: q + (ctxText ? `\n(Local detectors see: ${ctxText})` : "") } ] }] }) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error?.message || r.status);
-    const a = j.content[0].text.trim(); $("answer").textContent = a; say(a);
-  } catch (e) { $("answer").textContent = "Claude error: " + e.message; }
+// ---------- JARVIS brain ----------
+for (const id of ["apikey", "elKey", "elVoice", "brain", "voicePick"]) {
+  const v = store.get(id, null); if (v !== null && id !== "voicePick") $(id).value = v;
+  $(id).onchange = () => store.set(id, $(id).value.trim());
 }
-$("ask").onclick = () => $("question").value.trim() && askClaude($("question").value.trim());
-$("question").onkeydown = e => { if (e.key === "Enter") $("ask").click(); };
-$("describe").onclick = () => askClaude("What do you see? Describe it briefly.");
+const history = [];
+function sceneText() {
+  const count = a => Object.entries(a.reduce((m, x) => (m[x] = (m[x] || 0) + 1, m), {})).map(([k, n]) => n > 1 ? `${n} ${k}s` : k).join(", ");
+  const parts = [];
+  const objs = seen.objects.filter(o => !o.startsWith("holding ")), held = seen.objects.filter(o => o.startsWith("holding ")).map(o => o.slice(8));
+  if (active.has("objects")) parts.push("Objects in view: " + (objs.length ? count(objs) : "nothing recognised"));
+  if (held.length) parts.push("Held in hand: " + held.join(", "));
+  if (active.has("faces")) parts.push("Faces: " + (seen.faces.length ? seen.faces.join(", ") : "none"));
+  if (active.has("hands")) parts.push("Hand gestures: " + (seen.gestures.length ? seen.gestures.join(", ") : "no hands visible"));
+  if (active.has("pose") && seen.pose.length) parts.push("Body: " + seen.pose.join(", "));
+  if (active.has("mesh") && seen.expr.length) parts.push("Expression: " + seen.expr.join(", "));
+  if (active.has("motion")) parts.push("Motion: " + (seen.motion ? "yes" : "no"));
+  return parts.join(". ") || "No detectors are switched on.";
+}
+const SYSTEM = "You are JARVIS, a witty, loyal British AI assistant helping your creator, Christian, through his camera. " +
+  "Reply in one or two short spoken sentences, no lists, no markdown, no emojis.";
+function addChat(who, text) { const d = document.createElement("div"); d.className = who; d.textContent = text; $("chat").appendChild(d); $("chat").scrollTop = 1e9; return d; }
+
+let llm = null, llmId = null;
+async function localEngine(kind) {
+  const webllm = await import("https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.85/+esm");
+  if (!navigator.gpu) throw new Error("this browser has no WebGPU. Use Chrome on the Mac, or Safari on iOS 26+, or pick the Claude brain");
+  const adapter = await navigator.gpu.requestAdapter();
+  const f16 = adapter?.features?.has("shader-f16") ? "q4f16_1" : "q4f32_1";
+  const id = (kind === "local-big" ? "Llama-3.2-1B-Instruct-" : "Qwen2.5-0.5B-Instruct-") + f16 + "-MLC";
+  if (llm && llmId === id) return llm;
+  setStatus("Downloading JARVIS brain (first time only)…");
+  llm = await webllm.CreateMLCEngine(id, { initProgressCallback: r => setStatus(`Brain: ${r.text}`) });
+  llmId = id; setStatus("JARVIS brain ready."); return llm;
+}
+
+async function think(q) {
+  const brain = $("brain").value, scene = sceneText();
+  if (brain === "claude") {
+    const key = $("apikey").value.trim();
+    if (!started) throw new Error("start the camera first so Claude can see");
+    if (!key) throw new Error("add a Claude API key in Brain & voice settings, or pick a free brain");
+    const c = document.createElement("canvas"); c.width = 960; c.height = Math.round(960 * video.videoHeight / video.videoWidth);
+    c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
+    const img = c.toDataURL("image/jpeg", 0.8).split(",")[1];
+    const msgs = [...history, { role: "user", content: [
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: img } },
+      { type: "text", text: `${q}\n(Detectors report: ${scene})` } ] }];
+    const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+      body: JSON.stringify({ model: "claude-sonnet-4-5", max_tokens: 300, system: SYSTEM, messages: msgs }) });
+    const j = await r.json(); if (!r.ok) throw new Error(j.error?.message || r.status);
+    return j.content[0].text.trim();
+  }
+  const eng = await localEngine(brain);
+  const res = await eng.chat.completions.create({ temperature: 0.6, max_tokens: 120, messages: [
+    { role: "system", content: SYSTEM + " You can't see the picture itself; you only get what the camera detectors report, so never invent details beyond it. Live camera report: " + scene + ". Time: " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + "." },
+    ...history, { role: "user", content: q } ] });
+  return res.choices[0].message.content.trim();
+}
+
+// simple voice commands handled instantly, no brain needed
+function command(q) {
+  const t = q.toLowerCase();
+  const on = /\b(turn on|start|enable|show)\b/.test(t), off = /\b(turn off|stop|disable|hide)\b/.test(t);
+  const map = { objects: /object/, faces: /face(?! mesh)/, hands: /hand/, pose: /pose|body|skeleton/, mesh: /mesh/, motion: /motion/ };
+  if (on || off) for (const [k, re] of Object.entries(map)) if (re.test(t)) {
+    if (active.has(k) !== on) toggle(k); return `${on ? "Switching on" : "Switching off"} ${k === "mesh" ? "face mesh" : k}.`;
+  }
+  if (/snapshot|take a (photo|picture)/.test(t)) { $("snap").click(); return "Snapshot taken."; }
+  if (/flip (the )?camera|switch camera/.test(t)) { $("flip").click(); return "Flipping the camera."; }
+  return null;
+}
+
+let busy = false;
+async function ask(q) {
+  q = q.trim(); if (!q || busy) return;
+  busy = true; addChat("me", q); $("question").value = "";
+  const bubble = addChat("ai", "…");
+  try {
+    let a = command(q);
+    if (!a) {
+      a = await think(q);
+      history.push({ role: "user", content: q }, { role: "assistant", content: a });
+      while (history.length > 8) history.shift();
+    }
+    bubble.textContent = a; say(a);
+  } catch (e) { bubble.textContent = "Problem: " + e.message; }
+  busy = false;
+}
+$("ask").onclick = () => ask($("question").value);
+$("question").onkeydown = e => { if (e.key === "Enter") ask($("question").value); };
+
+// ---------- voice in ----------
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, listening = false, wantHandsFree = false, pttOnce = false;
+function startRec(continuous) {
+  if (!SR) { setStatus("Voice input isn't supported in this browser. Use Chrome on the Mac or Safari on iPhone."); return; }
+  if (listening) return;
+  rec = new SR(); rec.lang = "en-US"; rec.continuous = continuous; rec.interimResults = false;
+  rec.onresult = e => {
+    const text = e.results[e.results.length - 1][0].transcript.trim();
+    if (pttOnce) { pttOnce = false; ask(text); return; }
+    const m = text.match(/\bjarvis\b[,.!?]?\s*(.*)/i);
+    if (m) m[1] ? ask(m[1]) : say("Yes?");
+  };
+  rec.onerror = e => { if (e.error === "not-allowed") { setStatus("Microphone blocked. Allow the mic for this page."); wantHandsFree = false; $("handsfree").checked = false; } };
+  rec.onend = () => { listening = false; $("talk").classList.remove("listening"); $("talk").textContent = "🎤 Tap and talk";
+    if (wantHandsFree && !speaking) setTimeout(() => startRec(true), 300); };
+  try { rec.start(); listening = true; $("talk").classList.add("listening"); $("talk").textContent = continuous ? "👂 Listening for “Jarvis”…" : "🔴 Listening… tap to stop"; } catch {}
+}
+function pauseListening() { if (rec && listening) { try { rec.abort(); } catch {} } }
+function resumeListening() { if (wantHandsFree && !listening) setTimeout(() => startRec(true), 400); }
+$("talk").onclick = () => {
+  player.src = SILENT; player.play().catch(() => {});        // unlock audio on iPhone
+  if (listening && !wantHandsFree) { rec.stop(); return; }
+  if (wantHandsFree) pauseListening();
+  pttOnce = true; startRec(false);
+};
+$("handsfree").onchange = () => { wantHandsFree = $("handsfree").checked; wantHandsFree ? startRec(true) : pauseListening(); };
 
 // ---------- faces ----------
 async function register() {
@@ -376,7 +521,7 @@ document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") return;
   const m = MODES.find(m => m[2].toLowerCase() === e.key.toLowerCase());
   if (m) toggle(m[0]);
-  else if (e.key === "r") register(); else if (e.key === "c") $("describe").click();
+  else if (e.key === "r") register(); else if (e.key === "t") $("talk").click();
   else if (e.key === "v") $("voice").click(); else if (e.key === "s") $("snap").click();
 });
 
