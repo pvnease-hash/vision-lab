@@ -114,6 +114,12 @@
         </select>
         <label for="voicePick"><small>Voice</small></label>
         <select id="voicePick"></select>
+        <label for="objAcc"><small>Object detection</small></label>
+        <select id="objAcc">
+          <option value="fast">Fast (smoother video)</option>
+          <option value="accurate">Accurate (bigger model, slower)</option>
+        </select>
+        <label class="row"><input type="checkbox" id="aiVerify" checked> Double-check held objects with Gemini (uses your key)</label>
         <label for="liveVoice"><small>Voice in Live mode</small></label>
         <select id="liveVoice">
           <option value="jarvis">JARVIS voice (your ElevenLabs voice, or the voice above)</option>
@@ -148,6 +154,7 @@ const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
 const M = "https://storage.googleapis.com/mediapipe-models/";
 const MODELS = {
   objects: M + "object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite",
+  objectsHQ: M + "object_detector/efficientdet_lite2/float16/1/efficientdet_lite2.tflite",
   hands:   M + "gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
   pose:    M + "pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
   mesh:    M + "face_landmarker/face_landmarker/float16/1/face_landmarker.task",
@@ -329,10 +336,11 @@ async function ensure(key) {
   loading[key] = true; setStatus(`Loading ${key} model…`);
   try {
     if (key === "objects") {
-      models.objects = await make(ObjectDetector, MODELS.objects, { scoreThreshold: 0.35, maxResults: 10 });
+      models.objects = await make(ObjectDetector, $("objAcc").value === "accurate" ? MODELS.objectsHQ : MODELS.objects, { scoreThreshold: 0.3, maxResults: 12 });
       // "What's in my hand": zoom in on each hand and look closer
-      models.held = await make(ObjectDetector, MODELS.objects, { scoreThreshold: 0.2, maxResults: 3, categoryDenylist: ["person"] }, "IMAGE");
-      models.classify = await make(ImageClassifier, MODELS.classify, { maxResults: 1 }, "IMAGE");
+      // "What's in my hand": a bigger, more accurate detector looks at a zoomed crop around each hand
+      models.held = await make(ObjectDetector, MODELS.objectsHQ, { scoreThreshold: 0.15, maxResults: 5, categoryDenylist: ["person"] }, "IMAGE");
+      models.classify = await make(ImageClassifier, MODELS.classify, { maxResults: 3 }, "IMAGE");
       if (!models.hands) models.hands = await make(GestureRecognizer, MODELS.hands, { numHands: 2 });
     }
     if (key === "hands" && !models.hands) models.hands = await make(GestureRecognizer, MODELS.hands, { numHands: 2 });
@@ -388,35 +396,79 @@ function whoIs(emb) {
 let faceCache = [], frameNo = 0, greeted = {};
 
 // ---------- objects in hand ----------
-const hc = document.createElement("canvas"); hc.width = hc.height = 320;
-let heldCache = [];
+// Looks at a zoomed crop around each hand with two models, and only names the object once several
+// looks agree (votes). The % shown is the averaged confidence. Optionally Gemini double-checks.
+const hc = document.createElement("canvas"); hc.width = hc.height = 384;
+let heldCache = [];                       // per hand: { x, y, s, name, pct, src, votes: Map }
+const heldState = [];                     // per hand index: votes + AI answer
+const NICE_NAME = n => n.split(",")[0].replace(/_/g, " ").trim();
+function handCrop(lm, vw, vh) {
+  const xs = lm.map(p => p.x * vw), ys = lm.map(p => p.y * vh);
+  const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  // centre slightly past the knuckles, where held things usually are
+  const cx = lm[9].x * vw * 0.6 + lm[12].x * vw * 0.4, cy = lm[9].y * vh * 0.6 + lm[12].y * vh * 0.4;
+  const s = Math.min(Math.max(180, span * 2.7), vw, vh);
+  return { x: Math.max(0, Math.min(vw - s, cx - s / 2)), y: Math.max(0, Math.min(vh - s, cy - s / 2)), s };
+}
+async function geminiHeld(i, crop) {
+  const key = $("geminiKey").value.trim(), st = heldState[i]; if (!key || !$("aiVerify").checked || st.aiBusy) return;
+  st.aiBusy = true; st.aiT = performance.now();
+  try {
+    const data = crop.toDataURL("image/jpeg", 0.8).split(",")[1];
+    for (const [model, think] of [["gemini-flash-latest", true], ["gemini-flash-latest", false], ["gemini-2.5-flash", true]]) {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ inline_data: { mime_type: "image/jpeg", data } },
+          { text: 'This is a close-up around a person\'s hand. What object is the hand holding or touching? Be specific (brand/type if obvious, e.g. "Coca-Cola can", "iPhone", "TV remote"). Ignore the hand itself. Reply ONLY as JSON: {"object": "<name or nothing>", "confidence": <0-100>}' }] }],
+          generationConfig: { responseMimeType: "application/json", maxOutputTokens: 60, temperature: 0.1, ...(think ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }) });
+      if (r.status === 404 || (r.status === 400 && think)) continue;
+      const j = await r.json(); if (!r.ok) throw new Error(j.error?.message || r.status);
+      const ans = JSON.parse((j.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("") || "{}");
+      st.ai = ans.object && !/^(nothing|none|no object|empty)/i.test(ans.object) ? { name: ans.object, pct: Math.round(+ans.confidence || 80), t: performance.now() } : { name: null, t: performance.now() };
+      break;
+    }
+  } catch (e) { log("AI check: " + e.message); }
+  st.aiBusy = false;
+}
 function heldObjects(hr, compute) {
   if (!hr || !models.held) { heldCache = []; return; }
-  const vw = video.videoWidth, vh = video.videoHeight;
-  if (compute || heldCache.length > hr.landmarks.length) {
-    if (!compute) { heldCache = heldCache.slice(0, hr.landmarks.length); } else
-    heldCache = hr.landmarks.map(lm => {
-      const xs = lm.map(p => p.x * vw), ys = lm.map(p => p.y * vh);
-      const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-      const size = Math.max(160, Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * 2.4);
-      const x = Math.max(0, Math.min(vw - size, cx - size / 2)), y = Math.max(0, Math.min(vh - size, cy - size / 2));
-      const s = Math.min(size, vw, vh);
-      hc.getContext("2d").drawImage(video, x, y, s, s, 0, 0, 320, 320);
-      const d = models.held.detect(hc).detections[0];
-      let name, score;
-      if (d) { name = d.categories[0].categoryName; score = d.categories[0].score; }
-      else {
-        const c = models.classify.classify(hc).classifications[0]?.categories[0];
-        if (c && c.score > 0.2) { name = c.categoryName.split(",")[0]; score = c.score; }
+  const vw = video.videoWidth, vh = video.videoHeight, now = performance.now();
+  if (compute) {
+    heldCache = hr.landmarks.map((lm, i) => {
+      const st = heldState[i] ||= { votes: new Map(), ai: null, aiT: 0, last: 0 };
+      if (now - st.last > 1500) st.votes.clear();                      // hand was gone: start fresh
+      st.last = now;
+      const { x, y, s } = handCrop(lm, vw, vh);
+      hc.getContext("2d").drawImage(video, x, y, s, s, 0, 0, hc.width, hc.height);
+      // gather candidates from both models
+      const cands = [];
+      for (const d of models.held.detect(hc).detections) {
+        const b = d.boundingBox, area = (b.width * b.height) / (hc.width * hc.height), c = d.categories[0];
+        if (area > 0.015) cands.push({ name: NICE_NAME(c.categoryName), score: c.score });
       }
-      return name ? { x, y, s, name, score } : null;
+      for (const c of models.classify.classify(hc).classifications[0]?.categories || [])
+        if (c.score > 0.12) cands.push({ name: NICE_NAME(c.categoryName), score: c.score * 0.85 });
+      // decay old votes, add new ones
+      for (const v of st.votes.values()) v.w *= 0.8;
+      for (const c of cands) { const v = st.votes.get(c.name) || { w: 0, avg: c.score, n: 0 };
+        v.w += c.score; v.avg = v.n ? v.avg * 0.7 + c.score * 0.3 : c.score; v.n++; st.votes.set(c.name, v); }
+      for (const [k, v] of st.votes) if (v.w < 0.05) st.votes.delete(k);
+      const best = [...st.votes.entries()].sort((a, b) => b[1].w - a[1].w)[0];
+      // ask Gemini every ~6 s while something is in hand (or when unsure)
+      if ((best || cands.length) && now - st.aiT > 6000) geminiHeld(i, hc);
+      const ai = st.ai && now - st.ai.t < 9000 ? st.ai : null;
+      if (ai?.name) return { x, y, s, name: ai.name, pct: ai.pct, src: "AI", sure: true };
+      if (!best) return { x, y, s, name: null };
+      const [name, v] = best, sure = v.n >= 3 && v.w >= 0.9;
+      return { x, y, s, name, pct: Math.round(v.avg * 100), sure };
     });
-  }
+  } else if (heldCache.length > hr.landmarks.length) heldCache = heldCache.slice(0, hr.landmarks.length);
   for (const h of heldCache) {
     if (!h) continue;
-    seen.objects.push("holding " + h.name);
-    ctx.setLineDash([8, 6]); box(h.x, h.y, h.s, h.s, "#7cfc00"); ctx.setLineDash([]);
-    label(`Holding: ${h.name}`, h.x + h.s, h.y + 22, "#7cfc00");
+    if (h.name && h.sure) seen.objects.push("holding " + h.name);
+    const col = h.sure ? "#7cfc00" : "#9aa5b1";
+    ctx.setLineDash([8, 6]); box(h.x, h.y, h.s, h.s, col); ctx.setLineDash([]);
+    label(!h.name ? "🔍 Show me…" : h.sure ? `Holding: ${h.name} ${h.pct}%${h.src === "AI" ? " ✓AI" : ""}` : `🔍 Checking… ${h.name}? ${h.pct}%`, h.x + h.s, h.y + 22, col);
   }
 }
 
@@ -439,8 +491,15 @@ function motion() {
 
 // =================== EXTRA VISION MODES ===================
 const X = { scene: [], text: "", words: [], codes: [], gaze: "", squats: 0, raises: 0, strokes: [], depth: null };
+const NV = "grayscale(1) sepia(1) hue-rotate(70deg) saturate(5)";
 const FILTERS = [
-  { name: "off", css: "" }, { name: "Night vision", css: "grayscale(1) sepia(1) hue-rotate(70deg) saturate(5) brightness(1.3) contrast(1.2)" },
+  { name: "off", css: "" }, { name: "Night vision", css: NV + " brightness(1.3) contrast(1.2)" },
+  { name: "Starlight '68", css: NV + " brightness(1.9) contrast(1.4) blur(0.6px)", grain: 0.55, tube: "mono", scan: true, flicker: 0.12 },
+  { name: "NVG goggles", css: NV + " brightness(1.7) contrast(1.3)", grain: 0.3, tube: "bino", scan: true, flicker: 0.05 },
+  { name: "White phosphor", css: "grayscale(1) brightness(1.7) contrast(1.4)", grain: 0.3, tube: "mono", flicker: 0.04 },
+  { name: "Predator", css: "", thermal: true, invert: true },
+  { name: "Terminator", css: "grayscale(1) sepia(1) hue-rotate(-50deg) saturate(6) contrast(1.3)", hud: true },
+  { name: "X-ray", css: "grayscale(1) invert(1) contrast(1.6)" },
   { name: "Thermal", css: "", thermal: true }, { name: "Comic", css: "contrast(1.6) saturate(2.2)" },
   { name: "Matrix", css: "grayscale(1) sepia(1) hue-rotate(80deg) saturate(8) brightness(0.9) contrast(1.4)" },
   { name: "Noir", css: "grayscale(1) contrast(1.5)" } ];
@@ -468,9 +527,34 @@ function drawVideoFrame() {
   } else { ctx.filter = f.css || "none"; ctx.drawImage(video, 0, 0, W(), H()); ctx.filter = "none"; }
   if (f.thermal) {
     const img = ctx.getImageData(0, 0, W(), H()), d = img.data;
-    for (let i = 0; i < d.length; i += 4) { const v = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8; d[i] = THERMAL[v * 3]; d[i + 1] = THERMAL[v * 3 + 1]; d[i + 2] = THERMAL[v * 3 + 2]; }
+    for (let i = 0; i < d.length; i += 4) { let v = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8; if (f.invert) v = 255 - v; d[i] = THERMAL[v * 3]; d[i + 1] = THERMAL[v * 3 + 1]; d[i + 2] = THERMAL[v * 3 + 2]; }
     ctx.putImageData(img, 0, 0);
   }
+  if (f.grain || f.tube || f.scan || f.hud) drawLensFx(f);
+}
+// film grain, scanlines, flicker and the round image-intensifier tube (like a Vietnam-era AN/PVS-2 starlight scope)
+const grainC = document.createElement("canvas"); grainC.width = grainC.height = 256;
+(() => { const g = grainC.getContext("2d"), im = g.createImageData(256, 256);
+  for (let i = 0; i < im.data.length; i += 4) { const v = Math.random() * 255; im.data[i] = v * 0.6; im.data[i + 1] = v; im.data[i + 2] = v * 0.6; im.data[i + 3] = 255; }
+  g.putImageData(im, 0, 0); })();
+function drawLensFx(f) {
+  const w = W(), h = H(); ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (f.grain) { ctx.globalAlpha = f.grain * 0.35; ctx.globalCompositeOperation = "overlay";
+    const ox = Math.random() * 256, oy = Math.random() * 256; for (let x = -ox; x < w; x += 256) for (let y = -oy; y < h; y += 256) ctx.drawImage(grainC, x, y);
+    ctx.globalCompositeOperation = "source-over"; }
+  if (f.flicker) { ctx.globalAlpha = Math.random() * f.flicker; ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h); }
+  if (f.scan) { ctx.globalAlpha = 0.12; ctx.fillStyle = "#000"; for (let y = 0; y < h; y += 3) ctx.fillRect(0, y, w, 1); }
+  ctx.globalAlpha = 1;
+  if (f.tube) { ctx.fillStyle = "#000"; ctx.beginPath(); ctx.rect(0, 0, w, h);
+    const r = Math.min(w, h) * (f.tube === "bino" ? 0.47 : 0.5);
+    if (f.tube === "bino") { ctx.arc(w / 2 - r * 0.78, h / 2, r, 0, Math.PI * 2, true); ctx.moveTo(w / 2 + r * 1.78, h / 2); ctx.arc(w / 2 + r * 0.78, h / 2, r, 0, Math.PI * 2, true); }
+    else ctx.arc(w / 2, h / 2, r, 0, Math.PI * 2, true);
+    ctx.fill("evenodd");
+    const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.2, w / 2, h / 2, Math.min(w, h) * 0.55);
+    g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(0,0,0,0.75)"); ctx.fillStyle = g; ctx.fillRect(0, 0, w, h); }
+  if (f.hud) { ctx.font = "bold 13px monospace"; ctx.fillStyle = "rgba(255,80,80,.9)";
+    ["ANALYSIS:", "MATCH " + (seen.objects[0] || "SCANNING").toUpperCase(), "THREAT ASSESSMENT: LOW", "MODE: JARVIS"].forEach((t, i) => ctx.fillText(t, w - 230, 30 + i * 18)); }
+  ctx.restore();
 }
 function grab(width) { work.width = width; work.height = Math.round(width * video.videoHeight / video.videoWidth); wctx.drawImage(video, 0, 0, work.width, work.height); return work; }
 // --- slow background jobs (each runs on its own timer so the video stays smooth) ---
@@ -621,7 +705,7 @@ function runOneModel(t) {
     if (frameNo % 3 === 0 || faceCache.length !== R.faces.length)
       faceCache = R.faces.map(d => Object.keys(known).length ? whoIs(faceEmbedding(d.boundingBox)) : ["Face", 0]);
   }
-  if (job === "hands") { R.hands = models.hands.recognizeForVideo(video, t); if (active.has("objects") && turn % 3 === 0) heldObjects(R.hands, true); }
+  if (job === "hands") { R.hands = models.hands.recognizeForVideo(video, t); if (active.has("objects") && turn % 2 === 0) heldObjects(R.hands, true); }
   if (job === "pose") R.pose = models.pose.detectForVideo(video, t);
   if (job === "seg") { const r = models.seg.segmentForVideo(video, t); const m = r.confidenceMasks?.[0]; if (m) setSegMask(m.getAsFloat32Array(), m.width, m.height); r.close?.(); }
   if (job === "mesh") R.mesh = models.mesh.detectForVideo(video, t);
@@ -638,8 +722,8 @@ function track(list, dets, now) {
       const dist = Math.hypot((it.tx + it.tw / 2) - (d.x + d.w / 2), (it.ty + it.th / 2) - (d.y + d.h / 2));
       if (dist < Math.max(d.w, d.h) && dist < bestD) { best = it; bestD = dist; }
     }
-    if (best) { Object.assign(best, { tx: d.x, ty: d.y, tw: d.w, th: d.h, seen: now, extra: d.extra }); used.add(best); }
-    else list.push({ label: d.label, x: d.x, y: d.y, w: d.w, h: d.h, tx: d.x, ty: d.y, tw: d.w, th: d.h, seen: now, born: now, extra: d.extra, a: 0 });
+    if (best) { Object.assign(best, { tx: d.x, ty: d.y, tw: d.w, th: d.h, seen: now, extra: d.extra, hits: best.hits + 1, score: d.score == null ? best.score : best.score * 0.7 + d.score * 0.3 }); used.add(best); }
+    else list.push({ label: d.label, x: d.x, y: d.y, w: d.w, h: d.h, tx: d.x, ty: d.y, tw: d.w, th: d.h, seen: now, born: now, extra: d.extra, a: 0, hits: 1, score: d.score ?? 1 });
   }
   for (let i = list.length - 1; i >= 0; i--) if (now - list[i].seen > 600) list.splice(i, 1);   // keep briefly, then fade away
 }
@@ -647,6 +731,7 @@ function drawTracks(list, now, colorOf) {
   for (const it of list) {
     const k = 0.25; it.x += (it.tx - it.x) * k; it.y += (it.ty - it.y) * k; it.w += (it.tw - it.w) * k; it.h += (it.th - it.h) * k;
     const age = now - it.seen, target = age > 250 ? Math.max(0, 1 - (age - 250) / 350) : (now - it.born > 150 ? 1 : 0.4);
+    if (it.hits < 2) continue;                                   // must be seen twice before it's shown (no snap judgements)
     it.a += (target - it.a) * 0.2; if (it.a < 0.05) continue;
     ctx.globalAlpha = it.a; const col = colorOf(it);
     box(it.x, it.y, it.w, it.h, col); label(it.text || it.label, it.x + it.w, it.y, col); ctx.globalAlpha = 1;
@@ -685,16 +770,17 @@ function drawResults() {
   const now = performance.now();
   if (active.has("objects")) {
     if (R.objects !== lastObjRes) { lastObjRes = R.objects;
-      track(tracks.objects, R.objects.map(d => ({ label: d.categories[0].categoryName, x: d.boundingBox.originX, y: d.boundingBox.originY, w: d.boundingBox.width, h: d.boundingBox.height })), now); }
-    seen.objects = tracks.objects.filter(t => now - t.seen < 400).map(t => t.label);
+      track(tracks.objects, R.objects.map(d => ({ label: d.categories[0].categoryName, score: d.categories[0].score, x: d.boundingBox.originX, y: d.boundingBox.originY, w: d.boundingBox.width, h: d.boundingBox.height })), now); }
+    for (const it of tracks.objects) it.text = `${it.label} ${Math.round(it.score * 100)}%`;
+    seen.objects = tracks.objects.filter(t => now - t.seen < 400 && t.hits >= 2).map(t => t.label);
     drawTracks(tracks.objects, now, () => "#ffb000");
     heldObjects(R.hands, false);
   } else tracks.objects = [];
   if (active.has("faces")) {
     if (R.faces !== lastFaceRes) { lastFaceRes = R.faces;
-      track(tracks.faces, R.faces.map((d, i) => ({ label: "face", extra: faceCache[i] || ["Face", 0], x: d.boundingBox.originX, y: d.boundingBox.originY, w: d.boundingBox.width, h: d.boundingBox.height })), now); }
+      track(tracks.faces, R.faces.map((d, i) => ({ label: "face", score: d.categories?.[0]?.score, extra: faceCache[i] || ["Face", 0], x: d.boundingBox.originX, y: d.boundingBox.originY, w: d.boundingBox.width, h: d.boundingBox.height })), now); }
     seen.faces = faceCache.map(f => f[0]);
-    for (const it of tracks.faces) { const name = (it.extra || ["Face"])[0]; it.text = name;
+    for (const it of tracks.faces) { const [name, sc] = it.extra || ["Face", 0]; it.text = sc ? `${name} ${Math.round(sc * 100)}%` : `${name} ${Math.round((it.score || 1) * 100)}%`;
       if (!["Unknown", "Face"].includes(name) && Date.now() - (greeted[name] || 0) > 120000) { greeted[name] = Date.now(); say(`Hello, ${name}`); } }
     drawTracks(tracks.faces, now, it => it.text === "Unknown" ? "#ff8c42" : "#3ddc84");
   } else tracks.faces = [];
@@ -759,7 +845,7 @@ function loop() {
 }
 
 // ---------- JARVIS brain ----------
-for (const id of ["apikey", "geminiKey", "groqKey", "elKey", "elVoice", "brain", "voicePick", "recMode", "liveVoice"]) {
+for (const id of ["apikey", "geminiKey", "groqKey", "elKey", "elVoice", "brain", "voicePick", "recMode", "liveVoice", "objAcc"]) {
   const v = store.get(id, null); if (v !== null && id !== "voicePick") $(id).value = v;
   $(id).onchange = () => store.set(id, $(id).value.trim());
 }
@@ -1278,6 +1364,12 @@ function liveStop() {
   setOrb("idle", "");
 }
 $("geminiKey").addEventListener("change", () => { if ($("geminiKey").value.trim() && !liveOn) liveStart(); });
+$("objAcc").addEventListener("change", async () => {
+  tracks.objects = []; if (!vision || !models.objects) return;
+  setStatus("Switching object detector…");
+  try { models.objects = await make(ObjectDetector, $("objAcc").value === "accurate" ? MODELS.objectsHQ : MODELS.objects, { scoreThreshold: 0.3, maxResults: 12 }); setStatus("Object detector: " + $("objAcc").value); }
+  catch (e) { setStatus("Couldn't switch detector: " + e.message); }
+});
 $("liveVoice").addEventListener("change", () => { stopJarvisVoice(); stopPlayback(); if (liveOn) analyser = useJarvisVoice() ? null : liveAnalyser; });
 $("live").onclick = () => { if (!liveOn) unlockAudio(); if (liveOn) { liveStop(); store.set("liveAuto", false); } else liveStart(); };
 
