@@ -46,7 +46,7 @@
   @media (prefers-reduced-motion: reduce) { #talk.listening { animation:none; } }
   #orb { position:fixed; right:16px; bottom:16px; z-index:50; width:140px; display:flex; flex-direction:column; align-items:center; gap:6px; touch-action:none; user-select:none; -webkit-user-select:none; cursor:grab; }
   #orb.dragging { cursor:grabbing; }
-  #orb canvas { width:140px; height:140px; background:transparent; border-radius:50%; filter:drop-shadow(0 0 18px rgba(47,212,255,.35)); }
+  #orb canvas { width:140px; height:140px; background:transparent; border-radius:50%; }
   #orbcap { max-width:240px; font-size:12px; line-height:1.35; text-align:center; color:#cfefff; background:rgba(11,15,20,.82); border:1px solid #1f3a4a; border-radius:10px; padding:6px 10px; display:none; }
   #orbstate { font:600 10px/1 -apple-system,sans-serif; letter-spacing:2px; color:#2fd4ff; text-transform:uppercase; }
   @media (pointer:coarse) { button { min-height:44px; } button kbd { display:none; } input { font-size:16px; } }
@@ -120,7 +120,7 @@
 </main>
 
 <div id="orb" title="Tap to talk to JARVIS · drag to move">
-  <canvas id="orbc" width="280" height="280"></canvas>
+  <canvas id="orbc" width="200" height="200"></canvas>
   <div id="orbstate">JARVIS</div>
   <div id="orbcap"></div>
 </div>
@@ -241,7 +241,9 @@ function hookAnalyser() {           // real audio levels for the ElevenLabs voic
   } catch {}
 }
 const buf = new Uint8Array(128);
+let orbFrame = 0;
 function drawOrb(t) {
+  if (++orbFrame % 2 && orbState === "idle") return requestAnimationFrame(drawOrb);   // idle: half rate
   const W2 = oc.width, c = W2 / 2, R = W2 * 0.27;
   og.clearRect(0, 0, W2, W2);
   // target level per state
@@ -260,13 +262,13 @@ function drawOrb(t) {
   for (let i = 0; i < N; i++) {
     const a = (i / N) * Math.PI * 2 + orbSpin * 0.5;
     const wob = 0.5 + 0.5 * Math.sin(i * 1.7 + t / 120) * Math.sin(i * 0.6 - t / 210);
-    const len = 6 + orbLevel * 46 * (0.35 + 0.65 * wob);
-    og.strokeStyle = `rgba(${hue},${0.35 + 0.6 * orbLevel})`; og.lineWidth = 4; og.lineCap = "round";
+    const len = 4 + orbLevel * 33 * (0.35 + 0.65 * wob);
+    og.strokeStyle = `rgba(${hue},${0.35 + 0.6 * orbLevel})`; og.lineWidth = 3; og.lineCap = "round";
     og.beginPath(); og.moveTo(c + Math.cos(a) * (R + 10), c + Math.sin(a) * (R + 10));
     og.lineTo(c + Math.cos(a) * (R + 10 + len), c + Math.sin(a) * (R + 10 + len)); og.stroke();
   }
   // segmented ring
-  og.lineWidth = 5;
+  og.lineWidth = 4;
   for (let k = 0; k < 6; k++) {
     const a0 = orbSpin * (orbState === "thinking" ? 3 : 1) + k * Math.PI / 3;
     og.strokeStyle = `rgba(${hue},.9)`; og.beginPath(); og.arc(c, c, R, a0, a0 + Math.PI / 4.5); og.stroke();
@@ -359,10 +361,11 @@ let faceCache = [], frameNo = 0, greeted = {};
 // ---------- objects in hand ----------
 const hc = document.createElement("canvas"); hc.width = hc.height = 320;
 let heldCache = [];
-function heldObjects(hr) {
-  if (!hr || !models.held) return;
+function heldObjects(hr, compute) {
+  if (!hr || !models.held) { heldCache = []; return; }
   const vw = video.videoWidth, vh = video.videoHeight;
-  if (frameNo % 4 === 0 || heldCache.length !== hr.landmarks.length) {
+  if (compute || heldCache.length > hr.landmarks.length) {
+    if (!compute) { heldCache = heldCache.slice(0, hr.landmarks.length); } else
     heldCache = hr.landmarks.map(lm => {
       const xs = lm.map(p => p.x * vw), ys = lm.map(p => p.y * vh);
       const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
@@ -406,76 +409,103 @@ function motion() {
 }
 
 // ---------- main loop ----------
-let last = performance.now(), fps = 0;
+// The video is drawn every frame (smooth). The AI models run one at a time, taking turns,
+// only as often as this computer can keep up, and pause while the on-device brain is thinking.
+let last = performance.now(), fps = 0, aiRate = 0, aiCount = 0, aiT = performance.now();
+let nextAI = 0, aiCost = 30, turn = 0;
+const R = { objects: [], faces: [], hands: null, pose: null, mesh: null };
+const NICE = { Closed_Fist: "Fist", Open_Palm: "Open hand", Pointing_Up: "Pointing up", Thumb_Down: "Thumbs down",
+               Thumb_Up: "Thumbs up", Victory: "Peace", ILoveYou: "I love you", None: "Hand" };
+function runOneModel(t) {
+  const jobs = [];
+  if (active.has("objects") && models.objects) jobs.push("objects");
+  if (active.has("faces") && models.faces) jobs.push("faces");
+  if ((active.has("hands") || active.has("objects")) && models.hands) jobs.push("hands");
+  if (active.has("pose") && models.pose) jobs.push("pose");
+  if (active.has("mesh") && models.mesh) jobs.push("mesh");
+  if (!jobs.length) return false;
+  const job = jobs[turn++ % jobs.length];
+  if (job === "objects") R.objects = models.objects.detectForVideo(video, t).detections;
+  if (job === "faces") {
+    R.faces = models.faces.detectForVideo(video, t).detections;
+    if (frameNo % 3 === 0 || faceCache.length !== R.faces.length)
+      faceCache = R.faces.map(d => Object.keys(known).length ? whoIs(faceEmbedding(d.boundingBox)) : ["Face", 0]);
+  }
+  if (job === "hands") { R.hands = models.hands.recognizeForVideo(video, t); if (active.has("objects") && turn % 3 === 0) heldObjects(R.hands, true); }
+  if (job === "pose") R.pose = models.pose.detectForVideo(video, t);
+  if (job === "mesh") R.mesh = models.mesh.detectForVideo(video, t);
+  return true;
+}
+function drawResults() {
+  if (active.has("objects")) {
+    seen.objects = [];
+    for (const d of R.objects) {
+      const c = d.categories[0], b = d.boundingBox; seen.objects.push(c.categoryName);
+      box(b.originX, b.originY, b.width, b.height, "#ffb000");
+      label(`${c.categoryName} ${Math.round(c.score * 100)}%`, b.originX + b.width, b.originY, "#ffb000");
+    }
+    heldObjects(R.hands, false);
+  }
+  if (active.has("faces")) {
+    seen.faces = faceCache.map(f => f[0]);
+    R.faces.forEach((d, i) => {
+      const b = d.boundingBox, [name, s] = faceCache[i] || ["Face", 0];
+      const col = name === "Unknown" ? "#ff8c42" : "#3ddc84";
+      box(b.originX, b.originY, b.width, b.height, col);
+      label(s ? `${name} ${s.toFixed(2)}` : name, b.originX + b.width, b.originY, col);
+      if (!["Unknown", "Face"].includes(name) && Date.now() - (greeted[name] || 0) > 120000) { greeted[name] = Date.now(); say(`Hello, ${name}`); }
+    });
+  }
+  if (active.has("hands") && R.hands) {
+    const r = R.hands; seen.gestures = [];
+    r.landmarks.forEach((lm, i) => {
+      draw.drawConnectors(lm, GestureRecognizer.HAND_CONNECTIONS, { color: "#ff4fd8", lineWidth: 4 });
+      draw.drawLandmarks(lm, { color: "#fff", radius: 3 });
+      const g = r.gestures[i]?.[0], side = r.handedness[i]?.[0]?.categoryName || "Hand";
+      const nice = NICE[g?.categoryName] || "Hand"; seen.gestures.push(nice);
+      label(`${side}: ${nice}`, lm[0].x * W() + 40, lm[0].y * H() + 40, "#ff4fd8");
+    });
+  }
+  if (active.has("pose") && R.pose) {
+    for (const lm of R.pose.landmarks) {
+      draw.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#00e5a0", lineWidth: 4 });
+      draw.drawLandmarks(lm, { color: "#fff", radius: 3 });
+      if (lm[15].y < lm[0].y && lm[16].y < lm[0].y) { banner("🙌 BOTH HANDS UP!"); seen.pose = ["both hands raised"]; } else seen.pose = ["standing/sitting in view"];
+    }
+  }
+  if (active.has("mesh") && R.mesh) {
+    for (const lm of R.mesh.faceLandmarks) {
+      draw.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "#c0c0c070", lineWidth: 1 });
+      draw.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS, { color: "#2fd4ff", lineWidth: 2 });
+      draw.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS, { color: "#2fd4ff", lineWidth: 2 });
+    }
+    const bs = R.mesh.faceBlendshapes?.[0]?.categories;
+    if (bs) { const g = n => bs.find(c => c.categoryName === n)?.score || 0; const tags = [];
+      if (g("jawOpen") > 0.4) tags.push("Mouth open"); if ((g("mouthSmileLeft") + g("mouthSmileRight")) / 2 > 0.5) tags.push("Smiling");
+      if (g("eyeBlinkLeft") > 0.5 && g("eyeBlinkRight") > 0.5) tags.push("Eyes closed"); if (g("browInnerUp") > 0.5) tags.push("Eyebrows up");
+      seen.expr = tags; if (tags.length) banner(tags.join(" · "), "#2fd4ff"); }
+  }
+}
 function loop() {
   if (video.readyState >= 2) {
     if (out.width !== video.videoWidth) { out.width = video.videoWidth; out.height = video.videoHeight; }
     mirror ? ctx.setTransform(-1, 0, 0, 1, W(), 0) : ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(video, 0, 0, W(), H());
     const t = performance.now(); frameNo++;
-
-    if (active.has("objects") && models.objects) {
-      seen.objects = [];
-      for (const d of models.objects.detectForVideo(video, t).detections) {
-        const c = d.categories[0], b = d.boundingBox; seen.objects.push(c.categoryName);
-        box(b.originX, b.originY, b.width, b.height, "#ffb000");
-        label(`${c.categoryName} ${Math.round(c.score * 100)}%`, b.originX + b.width, b.originY, "#ffb000");
+    const brainBusy = busy && $("brain").value !== "claude";          // local brain needs the GPU
+    if (!brainBusy && t >= nextAI) {
+      const t0 = performance.now();
+      if (runOneModel(t0)) {
+        aiCount++; aiCost = 0.8 * aiCost + 0.2 * (performance.now() - t0);
+        nextAI = performance.now() + aiCost * 0.6;                     // leave time for smooth video
       }
     }
-    if (active.has("faces") && models.faces) {
-      const dets = models.faces.detectForVideo(video, t).detections;
-      if (frameNo % 8 === 0 || faceCache.length !== dets.length)
-        faceCache = dets.map(d => Object.keys(known).length ? whoIs(faceEmbedding(d.boundingBox)) : ["Face", 0]);
-      seen.faces = faceCache.map(f => f[0]);
-      dets.forEach((d, i) => {
-        const b = d.boundingBox, [name, s] = faceCache[i] || ["Face", 0];
-        const col = name === "Unknown" ? "#ff8c42" : "#3ddc84";
-        box(b.originX, b.originY, b.width, b.height, col);
-        label(s ? `${name} ${s.toFixed(2)}` : name, b.originX + b.width, b.originY, col);
-        if (!["Unknown", "Face"].includes(name) && Date.now() - (greeted[name] || 0) > 120000) { greeted[name] = Date.now(); say(`Hello, ${name}`); }
-      });
-    }
-    let handRes = null;
-    if ((active.has("hands") || active.has("objects")) && models.hands) handRes = models.hands.recognizeForVideo(video, t);
-    if (active.has("objects")) heldObjects(handRes);
-    if (active.has("hands") && handRes) {
-      const r = handRes; seen.gestures = [];
-      r.landmarks.forEach((lm, i) => {
-        draw.drawConnectors(lm, GestureRecognizer.HAND_CONNECTIONS, { color: "#ff4fd8", lineWidth: 4 });
-        draw.drawLandmarks(lm, { color: "#fff", radius: 3 });
-        const g = r.gestures[i]?.[0], side = r.handedness[i]?.[0]?.categoryName || "Hand";
-        const nice = { Closed_Fist: "Fist", Open_Palm: "Open hand", Pointing_Up: "Pointing up", Thumb_Down: "Thumbs down",
-                       Thumb_Up: "Thumbs up", Victory: "Peace", ILoveYou: "I love you", None: "Hand" }[g?.categoryName] || "Hand";
-        seen.gestures.push(nice);
-        label(`${side}: ${nice}`, lm[0].x * W() + 40, lm[0].y * H() + 40, "#ff4fd8");
-      });
-    }
-    if (active.has("pose") && models.pose) {
-      const r = models.pose.detectForVideo(video, t);
-      for (const lm of r.landmarks) {
-        draw.drawConnectors(lm, PoseLandmarker.POSE_CONNECTIONS, { color: "#00e5a0", lineWidth: 4 });
-        draw.drawLandmarks(lm, { color: "#fff", radius: 3 });
-        if (lm[15].y < lm[0].y && lm[16].y < lm[0].y) { banner("🙌 BOTH HANDS UP!"); seen.pose = ["both hands raised"]; } else seen.pose = ["standing/sitting in view"];
-      }
-    }
-    if (active.has("mesh") && models.mesh) {
-      const r = models.mesh.detectForVideo(video, t);
-      for (const lm of r.faceLandmarks) {
-        draw.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_TESSELATION, { color: "#c0c0c070", lineWidth: 1 });
-        draw.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS, { color: "#2fd4ff", lineWidth: 2 });
-        draw.drawConnectors(lm, FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS, { color: "#2fd4ff", lineWidth: 2 });
-      }
-      const bs = r.faceBlendshapes?.[0]?.categories;
-      if (bs) { const g = n => bs.find(c => c.categoryName === n)?.score || 0; const tags = [];
-        if (g("jawOpen") > 0.4) tags.push("Mouth open"); if ((g("mouthSmileLeft") + g("mouthSmileRight")) / 2 > 0.5) tags.push("Smiling");
-        if (g("eyeBlinkLeft") > 0.5 && g("eyeBlinkRight") > 0.5) tags.push("Eyes closed"); if (g("browInnerUp") > 0.5) tags.push("Eyebrows up");
-        seen.expr = tags; if (tags.length) banner(tags.join(" · "), "#2fd4ff"); }
-    }
-    if (active.has("motion")) motion();
-
-    fps = 0.9 * fps + 0.1 * (1000 / (t - last)); last = t;
+    drawResults();
+    if (active.has("motion") && frameNo % 2 === 0) motion();
+    fps = 0.9 * fps + 0.1 * (1000 / Math.max(1, t - last)); last = t;
+    if (t - aiT > 1000) { aiRate = aiCount * 1000 / (t - aiT); aiCount = 0; aiT = t; }
     ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.font = "12px monospace"; ctx.fillStyle = "#fff";
-    ctx.fillText(`${fps.toFixed(1)} fps`, 10, 18); ctx.restore();
+    ctx.fillText(`${fps.toFixed(0)} fps · AI ${aiRate.toFixed(0)}/s${brainBusy ? " (paused while thinking)" : ""}`, 10, 18); ctx.restore();
   }
   requestAnimationFrame(loop);
 }
@@ -539,7 +569,7 @@ async function think(q) {
     return j.content[0].text.trim();
   }
   const eng = await localEngine(brain);
-  const res = await eng.chat.completions.create({ temperature: 0.6, max_tokens: 120, messages: [
+  const res = await eng.chat.completions.create({ temperature: 0.6, max_tokens: 60, messages: [
     { role: "system", content: SYSTEM + " You can't see the picture itself; you only get what the camera detectors report, so never invent details beyond it. Live camera report: " + scene + ". Time: " + new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + "." },
     ...history, { role: "user", content: q } ] });
   return res.choices[0].message.content.trim();
@@ -797,7 +827,7 @@ $("big").style.display = "flex";
 async function openCamera() {
   if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
   video.srcObject = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: facing, width: { ideal: 960 }, height: { ideal: 540 } }, audio: false });
+    video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 360 } }, audio: false });
   await video.play();
   mirror = facing === "user"; prev = null; faceCache = [];
 }
