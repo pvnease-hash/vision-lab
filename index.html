@@ -33,6 +33,7 @@
   small { color:var(--muted); }
   select { width:100%; background:#0b0f14; color:var(--text); border:1px solid #2c3846; border-radius:8px; padding:8px; font:inherit; }
   #talk { text-align:center; font-size:16px; padding:12px; background:#1d3b2a; border-color:#2e6b47; }
+  #dictate.listening { background:#b3261e; border-color:#b3261e; }
   #talk.listening { background:#b3261e; border-color:#b3261e; animation:pulse 1s infinite alternate; }
   @keyframes pulse { from { opacity:1 } to { opacity:.6 } }
   #chat { max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin:8px 0; }
@@ -81,10 +82,12 @@
       <button id="talk">🎤 Tap and talk</button>
       <label class="row"><input type="checkbox" id="handsfree"> Hands-free: start with “Jarvis…”</label>
       <div id="chat"></div>
-      <div class="grid" style="grid-template-columns:1fr auto">
-        <input id="question" placeholder="Or type: What am I holding?">
+      <div class="grid" style="grid-template-columns:1fr auto auto">
+        <input id="question" placeholder="Type or dictate: What am I holding?">
+        <button id="dictate" title="Dictate into the box">🎙</button>
         <button id="ask">Send</button>
       </div>
+      <small id="heard"></small>
       <details>
         <summary>Brain &amp; voice settings</summary>
         <label for="brain"><small>Brain</small></label>
@@ -94,6 +97,12 @@
           <option value="claude">Claude · really sees the picture (API key, paid)</option>
         </select>
         <input id="apikey" type="password" placeholder="Claude API key (only for the Claude brain)">
+        <label for="recMode"><small>Speech recognition</small></label>
+        <select id="recMode">
+          <option value="auto">Auto (browser, switches to on-device if it fails)</option>
+          <option value="browser">Browser (fast, live words, needs internet)</option>
+          <option value="whisper">On-device Whisper (free, private, ≈40 MB download)</option>
+        </select>
         <label for="voicePick"><small>Voice</small></label>
         <select id="voicePick"></select>
         <input id="elKey" type="password" placeholder="ElevenLabs API key (optional, free tier)">
@@ -464,7 +473,7 @@ function loop() {
 }
 
 // ---------- JARVIS brain ----------
-for (const id of ["apikey", "elKey", "elVoice", "brain", "voicePick"]) {
+for (const id of ["apikey", "elKey", "elVoice", "brain", "voicePick", "recMode"]) {
   const v = store.get(id, null); if (v !== null && id !== "voicePick") $(id).value = v;
   $(id).onchange = () => store.set(id, $(id).value.trim());
 }
@@ -560,34 +569,172 @@ async function ask(q) {
 $("ask").onclick = () => ask($("question").value);
 $("question").onkeydown = e => { if (e.key === "Enter") ask($("question").value); };
 
-// ---------- voice in ----------
+// ---------- voice in (browser speech + on-device Whisper fallback) ----------
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let rec = null, listening = false, wantHandsFree = false, pttOnce = false;
-function startRec(continuous) {
-  if (!SR) { setStatus("Voice input isn't supported in this browser. Use Chrome on the Mac or Safari on iPhone."); return; }
-  if (listening) return;
-  rec = new SR(); rec.lang = "en-US"; rec.continuous = continuous; rec.interimResults = false;
-  rec.onresult = e => {
-    const text = e.results[e.results.length - 1][0].transcript.trim();
-    if (pttOnce) { pttOnce = false; ask(text); return; }
-    const m = text.match(/\bjarvis\b[,.!?]?\s*(.*)/i);
-    if (m) m[1] ? ask(m[1]) : (setOrb("listening", ""), pttOnce = true, say("Yes?"));
-  };
-  rec.onerror = e => { if (e.error === "not-allowed") { setStatus("Microphone blocked. Allow the mic for this page."); wantHandsFree = false; $("handsfree").checked = false; } };
-  rec.onend = () => { listening = false; $("talk").classList.remove("listening"); $("talk").textContent = "🎤 Tap and talk";
-    if (orbState === "listening") setOrb("idle");
-    if (wantHandsFree && !speaking) setTimeout(() => startRec(true), 300); };
-  try { rec.start(); listening = true; $("talk").classList.add("listening"); $("talk").textContent = continuous ? "👂 Listening for “Jarvis”…" : "🔴 Listening… tap to stop"; if (!continuous) setOrb("listening", ""); } catch {}
+let sess = null;                 // { mode: "ask" | "dictate" | "wake", text, engine }
+let wantHandsFree = false, browserBroken = false, listening = false;
+const SR_ERRORS = {
+  "not-allowed": "Microphone blocked. Allow the mic for this page (click the icon in the address bar) and try again.",
+  "service-not-allowed": "This browser's speech service is off.",
+  "audio-capture": "No microphone found.",
+  "network": "The browser's speech service couldn't be reached.",
+  "language-not-supported": "Speech language not supported here.",
+};
+function heard(t) { $("heard").textContent = t || ""; }
+function engineFor() {
+  const m = $("recMode").value;
+  if (m === "whisper" || !SR) return "whisper";
+  if (m === "auto" && browserBroken) return "whisper";
+  return "browser";
 }
-function pauseListening() { if (rec && listening) { try { rec.abort(); } catch {} } }
-function resumeListening() { if (wantHandsFree && !listening) setTimeout(() => startRec(true), 400); }
+function uiListening(on) {
+  listening = on;
+  const which = sess?.mode === "dictate" ? "dictate" : "talk";
+  $("talk").classList.toggle("listening", on && which === "talk");
+  $("dictate").classList.toggle("listening", on && which === "dictate");
+  $("talk").textContent = !on || which !== "talk" ? "🎤 Tap and talk" : sess.mode === "wake" ? "👂 Listening for “Jarvis”… (tap to stop)" : "🔴 Listening… tap when done";
+  if (on && sess.mode !== "wake") setOrb("listening", ""); else if (!on && orbState === "listening") setOrb("idle");
+}
+function finish() {             // a listening session ended: act on what was heard
+  const s0 = sess; sess = null; uiListening(false);
+  if (!s0) return;
+  const text = (s0.text || "").trim();
+  if (s0.mode === "dictate") { heard(text ? "" : "Didn't catch anything."); $("question").focus(); return; }
+  if (s0.mode === "ask") { heard(""); if (text) ask(text); else setOrb("idle", "I didn't catch that. Tap and try again."); }
+  if (s0.mode === "wake" && wantHandsFree && !speaking) setTimeout(() => wantHandsFree && !sess && listen("wake"), 300);
+}
+function gotText(text, isFinal) {  // live words from either engine
+  if (!sess) return;
+  if (sess.mode === "dictate") { $("question").value = (sess.base ? sess.base + " " : "") + text; return; }
+  if (sess.mode === "ask") { setOrb("listening", text); heard(text); sess.text = text; return; }
+  // wake mode: wait for "Jarvis …"
+  const m = text.match(/\b(jarvis|travis|jervis)\b[,.!?]?\s*(.*)/i);
+  if (m) {
+    setOrb("listening", m[2] || "Yes?");
+    if (isFinal) { const cmd = m[2].trim(); stopListening(); cmd ? ask(cmd) : (say("Yes?"), setTimeout(() => listen("ask"), 900)); }
+  }
+}
+function listen(mode) {
+  if (sess && !sess.cancelled) return;
+  sess = { mode, text: "", base: mode === "dictate" ? $("question").value.trim() : "", engine: engineFor() };
+  uiListening(true);
+  sess.engine === "browser" ? browserListen(sess) : whisperListen(sess);
+}
+function stopListening() {
+  if (!sess) return;
+  if (sess.stop) sess.stop(); else finish();
+}
+function pauseListening() { if (sess?.mode === "wake") { const s0 = sess; s0.cancelled = true; s0.stop?.(); } }
+function resumeListening() { if (wantHandsFree && !sess) setTimeout(() => wantHandsFree && !sess && !speaking && listen("wake"), 500); }
+
+// --- browser engine (Chrome / Safari built-in) ---
+function browserListen(s0) {
+  const rec = new SR(); rec.lang = navigator.language || "en-US"; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+  let quiet, gotAny = false, failed = null;
+  const silence = s0.mode === "dictate" ? 2500 : 1600;
+  s0.stop = () => { clearTimeout(quiet); try { rec.stop(); } catch { finish(); } };
+  rec.onresult = e => {
+    let fin = "", interim = "";
+    for (let i = 0; i < e.results.length; i++) (e.results[i].isFinal ? (fin += e.results[i][0].transcript) : (interim += e.results[i][0].transcript));
+    const text = (fin + " " + interim).replace(/\s+/g, " ").trim(); gotAny = true;
+    if (s0.mode === "wake") { gotText(e.results[e.results.length - 1][0].transcript.trim(), e.results[e.results.length - 1].isFinal); return; }
+    s0.text = text; gotText(text, !interim);
+    clearTimeout(quiet); quiet = setTimeout(() => s0.stop(), silence);   // stop after a pause
+  };
+  rec.onerror = e => {
+    if (e.error === "no-speech" || e.error === "aborted") return;
+    failed = e.error;
+  };
+  rec.onend = () => {
+    clearTimeout(quiet);
+    if (s0.cancelled) { if (sess === s0) { sess = null; uiListening(false); } return; }
+    if (failed && failed !== "not-allowed" && $("recMode").value === "auto") {   // fall back to on-device Whisper
+      browserBroken = true; heard((SR_ERRORS[failed] || failed) + " Switching to on-device recognition…");
+      s0.engine = "whisper"; s0.stop = null; whisperListen(s0); return;
+    }
+    if (failed) { heard(SR_ERRORS[failed] || ("Speech error: " + failed)); if (failed === "not-allowed") { wantHandsFree = false; $("handsfree").checked = false; } }
+    if (s0.mode !== "wake" && !gotAny && !failed && sess === s0 && !s0.restarted) {   // ended before you spoke (Safari does this) – try once more
+      s0.restarted = true; try { rec.start(); return; } catch {}
+    }
+    if (sess === s0) finish();
+  };
+  try { rec.start(); } catch (e) { failed = "start"; heard("Couldn't start the mic: " + e.message); finish(); }
+}
+
+// --- on-device Whisper engine (works in any modern browser, no internet after first download) ---
+let asr = null, asrLoading = null, micStream = null;
+async function getAsr() {
+  if (asr) return asr;
+  asrLoading ||= (async () => {
+    heard("Loading on-device speech model (first time only, ≈40 MB)…");
+    const { pipeline } = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm");
+    asr = await pipeline("automatic-speech-recognition", "onnx-community/whisper-tiny.en", { dtype: "q8", device: "wasm" });
+    heard(""); return asr;
+  })();
+  return asrLoading;
+}
+async function to16k(blob) {
+  const buf = await blob.arrayBuffer();
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const decoded = await new Promise((ok, bad) => ac.decodeAudioData(buf, ok, bad)); ac.close?.();
+  const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+  const src = off.createBufferSource(); src.buffer = decoded; src.connect(off.destination); src.start();
+  return (await off.startRendering()).getChannelData(0);
+}
+async function whisperListen(s0) {
+  try {
+    getAsr().catch(() => {});                      // start downloading while you talk
+    micStream ||= await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch (e) { heard("Microphone blocked: " + e.message); sess = null; uiListening(false); return; }
+  const mime = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"].find(t => window.MediaRecorder?.isTypeSupported?.(t)) || "";
+  const ac = new (window.AudioContext || window.webkitAudioContext)(); ac.resume?.();
+  const an = ac.createAnalyser(); an.fftSize = 512; ac.createMediaStreamSource(micStream).connect(an);
+  const data = new Uint8Array(an.fftSize);
+  const recordOnce = () => new Promise(resolve => {
+    const chunks = [], mr = new MediaRecorder(micStream, mime ? { mimeType: mime } : undefined);
+    let spoke = false, lastLoud = performance.now(), t0 = performance.now(), done = false;
+    mr.ondataavailable = e => e.data.size && chunks.push(e.data);
+    mr.onstop = () => { ac.close?.(); resolve(spoke ? new Blob(chunks, { type: mr.mimeType }) : null); };
+    const end = () => { if (!done) { done = true; try { mr.stop(); } catch { resolve(null); } } };
+    s0.stop = end;
+    mr.start(250);
+    (function tick() {
+      if (done) return;
+      an.getByteTimeDomainData(data); let sum = 0; for (const v of data) sum += ((v - 128) / 128) ** 2;
+      const lvl = Math.sqrt(sum / data.length); orbLevel = Math.max(orbLevel, Math.min(1, lvl * 6));
+      const now = performance.now();
+      if (lvl > 0.035) { spoke = true; lastLoud = now; }
+      const maxLen = s0.mode === "wake" ? 8000 : 20000, pause = s0.mode === "dictate" ? 2200 : 1300;
+      if ((spoke && now - lastLoud > pause) || now - t0 > maxLen || (!spoke && s0.mode !== "wake" && now - t0 > 7000)) end();
+      else requestAnimationFrame(tick);
+    })();
+  });
+  const blob = await recordOnce();
+  if (s0.cancelled) { if (sess === s0) { sess = null; uiListening(false); } return; }
+  if (!blob) { if (s0.mode === "wake") { sess = null; uiListening(false); resumeListening(); } else finish(); return; }
+  try {
+    setOrb(s0.mode === "wake" ? "idle" : "thinking", s0.mode === "wake" ? undefined : "Transcribing…"); heard("Transcribing…");
+    const [pipe, audio] = await Promise.all([getAsr(), to16k(blob)]);
+    const text = ((await pipe(audio)).text || "").replace(/\[.*?\]|\(.*?\)/g, "").trim();
+    heard("");
+    if (s0.mode === "wake") { sess = s0; gotText(text, true); if (sess === s0) { sess = null; uiListening(false); resumeListening(); } return; }
+    s0.text = text; gotText(text, true); finish();
+  } catch (e) { heard("Speech recognition failed: " + e.message); finish(); }
+}
+
 $("talk").onclick = () => {
   player.src = SILENT; player.play().catch(() => {}); hookAnalyser();   // unlock audio on iPhone
-  if (listening && !wantHandsFree) { rec.stop(); return; }
-  if (wantHandsFree) pauseListening();
-  pttOnce = true; startRec(false);
+  if (speaking) { speechSynthesis?.cancel(); player.pause(); sayDone(); }   // tap to interrupt JARVIS
+  if (sess && sess.mode !== "wake") { stopListening(); return; }
+  if (sess?.mode === "wake") { pauseListening(); }
+  setTimeout(() => listen("ask"), sess ? 250 : 0);
 };
-$("handsfree").onchange = () => { wantHandsFree = $("handsfree").checked; wantHandsFree ? startRec(true) : pauseListening(); };
+$("dictate").onclick = () => { if (sess?.mode === "dictate") { stopListening(); return; } if (sess) pauseListening(); setTimeout(() => listen("dictate"), sess ? 250 : 0); };
+$("handsfree").onchange = () => {
+  wantHandsFree = $("handsfree").checked;
+  if (wantHandsFree) { if (!sess) listen("wake"); } else pauseListening();
+};
+$("recMode").addEventListener("change", () => { browserBroken = false; if (sess) pauseListening(); if (wantHandsFree) resumeListening(); });
 
 // ---------- faces ----------
 async function register() {
