@@ -260,7 +260,7 @@ const OPT_DEFAULTS = { units: "us", theme: "apple", favModes: ["objects", "hands
   objCats: {}, objMin: 0.4, handSkel: true, handLabels: true, handTips: true,
   ex: "squat", exFavs: ["squat", "pushup", "curl", "jacks"], repVoice: true, distCal: 1, depthObjLabels: true,
   counterClass: "person", ghostSens: 1, thoughtsAI: true, mask: "shades", clavFace: true, clavBody: true,
-  brush: "neon", mirrorDraw: false, holoModel: "rocket", holoSolid: true, holoColor: "#64d2ff", intruderSound: true, trailLen: 0.75, laserColor: "#ff2d2d" };
+  brush: "neon", mirrorDraw: false, holoModel: "rocket", holoSolid: true, holoColor: "#64d2ff", mindSpeed: "normal", mindModel: "fast", mindBoxes: true, mindSpeak: false, mindLocal: true, intruderSound: true, trailLen: 0.75, laserColor: "#ff2d2d" };
 const opt = Object.assign({}, OPT_DEFAULTS, store.get("opts", {}));
 function saveOpt() { store.set("opts", opt); }
 const el = (tag, props = {}, kids = []) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(props)) { if (k === "style") e.style.cssText = v; else if (k.startsWith("on")) e[k] = v; else if (k === "html") e.innerHTML = v; else e.setAttribute(k, v); } for (const c of [].concat(kids)) if (c != null) e.append(c); return e; };
@@ -349,7 +349,12 @@ const SUBS = {
   ghost: () => [el("label", { class: "row" }, [el("small", {}, "Sensitivity"), el("input", { type: "range", min: 30, max: 300, value: Math.round(opt.ghostSens * 100), oninput: e => { opt.ghostSens = e.target.value / 100; saveOpt(); } })]),
     el("div", { class: "opts", style: "margin-top:6px" }, [chipT("↺ Recalibrate (keep still 3 s)", false, () => ghostRecalibrate()), chipT("Clear log", false, () => { GH.log = []; GH.events = 0; })]),
     el("small", {}, "Tip: put the camera on something steady. People, pets, hands and faces are ignored.")],
-  thoughts: () => [el("div", { class: "opts" }, [chipT("AI inner monologue", opt.thoughtsAI, () => opt.thoughtsAI = !opt.thoughtsAI)]),
+  thoughts: () => [el("div", { class: "opts" }, [chipT("🧠 AI mind", opt.thoughtsAI, () => opt.thoughtsAI = !opt.thoughtsAI), chipT("📦 AI boxes", opt.mindBoxes, () => opt.mindBoxes = !opt.mindBoxes),
+      chipT("🔊 Speak thoughts", opt.mindSpeak, () => opt.mindSpeak = !opt.mindSpeak), chipT("⚡ On-device signals", opt.mindLocal, () => opt.mindLocal = !opt.mindLocal)]),
+    el("small", { style: "display:block;margin-top:8px" }, "Think every"),
+    el("div", { class: "opts" }, [["fast", "4 s"], ["normal", "8 s"], ["chill", "15 s"]].map(([k, n]) => chipT(n, opt.mindSpeed === k, () => { opt.mindSpeed = k; MIND.interval = 0; }))),
+    el("small", { style: "display:block;margin-top:8px" }, "Brain"),
+    el("div", { class: "opts" }, [chipT("Fast (Flash-Lite)", opt.mindModel === "fast", () => opt.mindModel = "fast"), chipT("Smarter (Flash)", opt.mindModel === "smart", () => opt.mindModel = "smart")]),
     el("small", { style: "display:block;margin-top:8px" }, "Gemini key (free at aistudio.google.com/apikey) — stays in this browser only"),
     el("input", { type: "password", placeholder: "Paste Gemini key here", value: $("geminiKey").value, autocomplete: "off",
       oninput: e => { $("geminiKey").value = e.target.value.trim(); store.set("geminiKey", e.target.value.trim()); aiThoughtErr = ""; aiThoughtT = 0; } }),
@@ -1216,7 +1221,7 @@ function drawGhost(now) {
 // Shows what the AI is "thinking": its top guesses with %, runner-up guesses, and short-term predictions
 // (where your hand is heading, what you're reaching for, what you're probably doing). With a Gemini key it
 // also shows a real AI inner monologue + prediction every ~12 s.
-const handHist = [], personHist = []; let aiThought = null, aiThoughtT = 0, aiThoughtBusy = false;
+const handHist = [], personHist = [];
 const ACTIVITY = [[/phone/, "using a phone"], [/cup|mug|bottle|glass|can\b|coffee|water/, "having a drink"], [/book|paper|magazine/, "reading"],
   [/laptop|keyboard|mouse|monitor/, "working on a computer"], [/remote|tv|television/, "watching TV"], [/fork|knife|spoon|bowl|sandwich|pizza|donut|banana|apple|orange|cake|food/, "eating"],
   [/toothbrush/, "brushing teeth"], [/scissors|pen|pencil/, "making something"], [/dog|cat/, "hanging out with a pet"], [/controller|joystick/, "gaming"]];
@@ -1230,90 +1235,155 @@ async function gemFetch(model, key, body) {
     if (/api key|API_KEY|unauthenticated|credential/i.test(txt)) { const r2 = await fetch(url, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, body }); if (r2.ok || r2.status === 404) return r2; } }
   return r;
 }
-let aiThoughtErr = "";
+// =================== JARVIS MIND: live AI thoughts, predictions & scene understanding ===================
+// Every few seconds a small frame + what the detectors see + JARVIS's own recent notes go to Gemini.
+// It answers with a thought, what changed, mood/intent/attention, 2–3 probability-ranked predictions with
+// countdowns, boxes around the things it noticed, and whether its LAST prediction came true (live accuracy).
+let aiThoughtErr = "", aiThought = null, aiThoughtT = 0, aiThoughtBusy = false;
+const MIND = { hist: [], boxes: [], hits: 0, total: 0, interval: 0, lastMs: 0, calls: 0, spoken: "" };
+const MIND_SPEED = { fast: 4000, normal: 8000, chill: 15000 };
+const mindInterval = () => Math.max(MIND_SPEED[opt.mindSpeed] || 8000, MIND.interval);
+function mindFrame() {
+  if (!started || !video.videoWidth) return null;
+  const c = document.createElement("canvas"); c.width = 512; c.height = Math.round(512 * video.videoHeight / video.videoWidth);
+  c.getContext("2d").drawImage(video, 0, 0, c.width, c.height); return c.toDataURL("image/jpeg", 0.7).split(",")[1];
+}
 async function geminiThought(force) {
-  const key = $("geminiKey").value.trim(); if (!key || aiThoughtBusy || (!force && ((typeof liveOn !== "undefined" && liveOn) || busy))) return;
-  aiThoughtBusy = true; aiThoughtT = performance.now(); let ok = false;
+  const key = $("geminiKey").value.trim(); if (!key || aiThoughtBusy || document.hidden || (!force && ((typeof liveOn !== "undefined" && liveOn) || busy))) return;
+  aiThoughtBusy = true; aiThoughtT = performance.now(); const t0 = performance.now(); let ok = false;
+  const prev = MIND.hist.slice(-4).map(h => `[${Math.round((performance.now() - h.t) / 1000)}s ago] ${h.thought}${h.preds?.[0] ? " | predicted: " + h.preds[0].event : ""}`).join("\n") || "(none yet)";
+  const lastPred = MIND.hist.at(-1)?.preds?.[0]?.event || "";
+  const prompt = `You are J.A.R.V.I.S., an AI watching a live webcam in real time and thinking out loud to yourself. Be specific, observant and a little witty, like Tony Stark's AI.
+Detectors on the device report: ${sceneText()}
+Your recent notes (oldest first):
+${prev}
+${lastPred ? `Your last prediction was: "${lastPred}". Judge from this new frame whether it came true.` : ""}
+Reply ONLY with JSON in exactly this shape:
+{"thought":"vivid inner thought about what is happening right now, max 18 words","changed":"what changed since your last note, max 10 words, or empty","mood":"person's apparent mood, 1-2 words, or empty","intent":"what they seem to be doing or trying to do, max 6 words","attention":"what they are looking at, max 5 words, or empty","predictions":[{"event":"what will likely happen next, max 8 words","prob":0-100,"secs":seconds from now}],"objects":[{"label":"specific name","note":"detail, max 5 words","box_2d":[ymin,xmin,ymax,xmax]}],"last_prediction_came_true":true or false or null}
+Rules: 2-3 predictions, most likely first, honest probabilities that don't all sum to 100. Up to 6 objects, box_2d normalized 0-1000 on this image. Never invent things you can't see.`;
   try {
-    const img = snapshot();
-    for (const [model, th] of [["gemini-flash-latest", true], ["gemini-flash-latest", false], ["gemini-2.5-flash", true]]) {
-      const r = await gemFetch(model, key,
-        JSON.stringify({ contents: [{ role: "user", parts: [...(img ? [{ inline_data: { mime_type: "image/jpeg", data: img } }] : []),
-          { text: `You are JARVIS silently watching this live camera frame. Detectors report: ${sceneText()}. Reply ONLY as JSON: {"thought": "<your inner thought about what you see, max 14 words>", "prediction": "<what the person will most likely do in the next few seconds, max 12 words>", "confidence": <0-100>}` }] }],
-          generationConfig: { responseMimeType: "application/json", maxOutputTokens: 150, temperature: 0.7, ...(th ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }));
+    const img = mindFrame();
+    const models = opt.mindModel === "smart" ? [["gemini-flash-latest", true], ["gemini-2.5-flash", true], ["gemini-flash-lite-latest", false]] : [["gemini-flash-lite-latest", false], ["gemini-2.5-flash-lite", false], ["gemini-flash-latest", true]];
+    for (const [model, th] of models) {
+      const r = await gemFetch(model, key, JSON.stringify({ contents: [{ role: "user", parts: [...(img ? [{ inline_data: { mime_type: "image/jpeg", data: img } }] : []), { text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json", maxOutputTokens: 700, temperature: 0.6, ...(th ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }));
       if (r.status === 404) continue;
       const j = await r.json().catch(() => ({}));
-      if (r.status === 400 && th && /thinking/i.test(j.error?.message || "")) continue;
+      if (r.status === 400 && /thinking/i.test(j.error?.message || "")) continue;
+      if (r.status === 429 || /quota|exhausted|rate/i.test(j.error?.message || "")) { MIND.interval = Math.min(60000, Math.max(MIND_SPEED[opt.mindSpeed] || 8000, MIND.interval || 0) * 2); throw new Error(`rate-limited by Google, slowing to every ${Math.round(MIND.interval / 1000)}s`); }
       if (!r.ok) throw new Error(j.error?.message || "HTTP " + r.status);
       const txt = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("");
-      let ans = {}; try { ans = JSON.parse(txt.replace(/^```(json)?|```$/g, "").trim() || "{}"); } catch { ans = { thought: txt.slice(0, 120) }; }
-      if (ans.thought) { aiThought = { thought: String(ans.thought), prediction: String(ans.prediction || ""), conf: Math.round(+ans.confidence || 0), t: performance.now() }; ok = true; }
+      let a = {}; try { a = JSON.parse(txt.replace(/^```(json)?|```$/g, "").trim() || "{}"); } catch { a = { thought: txt.slice(0, 140) }; }
+      if (!a.thought) break;
+      const now = performance.now();
+      const preds = (Array.isArray(a.predictions) ? a.predictions : []).slice(0, 3).map(p => ({ event: String(p.event || "").slice(0, 60), prob: Math.max(0, Math.min(100, Math.round(+p.prob || 0))), secs: Math.max(0, +p.secs || 0), due: now + Math.max(0, +p.secs || 0) * 1000 })).filter(p => p.event);
+      if (typeof a.last_prediction_came_true === "boolean" && lastPred) { MIND.total++; if (a.last_prediction_came_true) MIND.hits++; }
+      const vw = 1000; MIND.boxes = (Array.isArray(a.objects) ? a.objects : []).slice(0, 6).filter(o => Array.isArray(o.box_2d) && o.box_2d.length === 4).map(o => {
+        const [y0, x0, y1, x1] = o.box_2d.map(Number); return { label: String(o.label || "").slice(0, 28), note: String(o.note || "").slice(0, 32), x: x0 / vw, y: y0 / vw, w: (x1 - x0) / vw, h: (y1 - y0) / vw, t: now }; }).filter(b => b.w > 0 && b.h > 0);
+      aiThought = { thought: String(a.thought).slice(0, 160), changed: String(a.changed || "").slice(0, 70), mood: String(a.mood || "").slice(0, 24), intent: String(a.intent || "").slice(0, 50), attention: String(a.attention || "").slice(0, 40), preds, t: now,
+        prediction: preds[0]?.event || "", conf: preds[0]?.prob || 0 };
+      MIND.hist.push({ thought: aiThought.thought, preds, t: now }); if (MIND.hist.length > 8) MIND.hist.shift();
+      MIND.lastMs = Math.round(now - t0); MIND.calls++; MIND.interval = Math.max(0, MIND.interval * 0.8 - 1000); ok = true;
+      if (opt.mindSpeak && !speaking && aiThought.thought !== MIND.spoken) { MIND.spoken = aiThought.thought; say(aiThought.thought); }
       break;
     }
-    aiThoughtErr = ok ? "" : "Gemini answered but sent no thought — retrying";
-  } catch (e) { aiThoughtErr = e.message.replace(/\s+/g, " ").slice(0, 120); log("thought: " + e.message); }
-  aiThoughtBusy = false; const st = $("thoughtKeyStatus"); if (st) st.textContent = aiThoughtErr ? "✗ " + aiThoughtErr : aiThought ? "✓ Key works — thoughts are live" : "";
+    aiThoughtErr = ok ? "" : "Gemini answered without a thought — retrying";
+  } catch (e) { aiThoughtErr = e.message.replace(/\s+/g, " ").slice(0, 120); log("mind: " + e.message); }
+  aiThoughtBusy = false; const st = $("thoughtKeyStatus"); if (st) st.textContent = aiThoughtErr ? "✗ " + aiThoughtErr : aiThought ? `✓ Live · ${MIND.calls} thoughts · last took ${(MIND.lastMs / 1000).toFixed(1)}s` : "";
+}
+function wrapText(t, maxW) { const words = t.split(" "), out = []; let line = ""; for (const w of words) { const tst = line ? line + " " + w : w; if (ctx.measureText(tst).width > maxW && line) { out.push(line); line = w; } else line = tst; } if (line) out.push(line); return out; }
+function drawMindBoxes(now) {
+  for (const b of MIND.boxes) {
+    const age = (now - b.t) / 1000, a = Math.max(0, Math.min(1, 1.6 - age / (mindInterval() / 1000 + 2)));
+    if (a <= 0) continue;
+    const x = b.x * W(), y = b.y * H(), w = b.w * W(), h = b.h * H(), c = Math.min(18, w / 4, h / 4);
+    ctx.save(); ctx.globalAlpha = a; ctx.strokeStyle = "#64d2ff"; ctx.lineWidth = 2.5; ctx.shadowColor = "#64d2ff"; ctx.shadowBlur = 10;
+    ctx.beginPath(); for (const [px, py, dx, dy] of [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]]) { ctx.moveTo(px + dx * c, py); ctx.lineTo(px, py); ctx.lineTo(px, py + dy * c); } ctx.stroke();
+    ctx.shadowBlur = 0; ctx.globalAlpha = a * 0.08; ctx.fillStyle = "#64d2ff"; ctx.fillRect(x, y, w, h); ctx.restore();
+    ctx.globalAlpha = a; label(`🧠 ${b.label}${b.note ? " · " + b.note : ""}`, x + w, y - 4, "#64d2ff"); ctx.globalAlpha = 1;
+  }
 }
 function drawThoughts(now) {
   X.prediction = ""; const lines = [], pct = v => Math.round(v * 100) + "%", w = W(), h = H();
-  // --- what I see (with the runner-up guesses) ---
+  // ---- fast on-device signals (every frame) ----
   const dets = (R.objects || []).filter(d => d.categories[0].score > 0.3).sort((a, b) => b.categories[0].score - a.categories[0].score);
-  lines.push(["👁 I see: " + (dets.length ? dets.slice(0, 4).map(d => `${d.categories[0].categoryName} ${pct(d.categories[0].score)}`).join(", ") : "nothing I'm sure of yet"), "#e6edf3"]);
+  if (dets.length) lines.push(["👁 " + dets.slice(0, 4).map(d => `${d.categories[0].categoryName} ${pct(d.categories[0].score)}`).join(" · "), "#c7c7cc"]);
   const st = heldState[0];
   if (st && st.votes.size && now - st.last < 1500) { const v = [...st.votes.entries()].sort((a, b) => b[1].w - a[1].w).slice(0, 3), tot = v.reduce((s, [, x]) => s + x.w, 0) || 1;
-    lines.push(["✋ In hand, I think: " + v.map(([n, x], i) => `${i ? "" : "▶ "}${n} ${Math.round(x.w / tot * 100)}%`).join(" · "), "#7cfc00"]); }
-  const gs = R.hands?.gestures || [];
-  if (gs.length) lines.push(["🤚 Gesture: " + gs.map(g => { const c = g[0]; return c ? `${NICE[c.categoryName] || c.categoryName} ${pct(c.score)}` : ""; }).filter(Boolean).join(", "), "#ff4fd8"]);
-  const bs = R.mesh?.faceBlendshapes?.[0]?.categories;
-  if (bs) { const g = n => bs.find(c => c.categoryName === n)?.score || 0;
-    const emo = [["happy", (g("mouthSmileLeft") + g("mouthSmileRight")) / 2], ["surprised", (g("jawOpen") + g("browInnerUp")) / 2], ["frowning", (g("browDownLeft") + g("browDownRight")) / 2], ["neutral", 0.25]].sort((a, b) => b[1] - a[1]);
-    lines.push([`🙂 Mood guess: ${emo[0][0]} ${pct(Math.min(1, emo[0][1] / (emo[0][1] + emo[1][1] + 1e-6)))} (vs ${emo[1][0]})`, "#2fd4ff"]); }
-  // --- predictions ---
-  const preds = [];
+    lines.push(["✋ " + v.map(([n, x]) => `${n} ${Math.round(x.w / tot * 100)}%`).join(" · "), "#7cfc00"]); }
   const lm = R.hands?.landmarks?.length && handSmooth[0]?.cur;
   if (lm) { const p = { x: lm[9].x * w, y: lm[9].y * h, t: now }; handHist.push(p); const v = velOf(handHist, now);
     if (v) { const sp = Math.hypot(v.vx, v.vy);
       if (sp > w * 0.15) {
-        const fx = p.x + v.vx * 0.5, fy = p.y + v.vy * 0.5;            // where the hand will be in 0.5 s
+        const fx = p.x + v.vx * 0.5, fy = p.y + v.vy * 0.5;
         ctx.save(); ctx.setLineDash([6, 6]); ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(fx, fy); ctx.stroke();
         ctx.setLineDash([]); ctx.globalAlpha = 0.5; ctx.beginPath(); ctx.arc(fx, fy, 16, 0, 7); ctx.stroke(); ctx.restore();
-        const sx = mirror ? -v.vx : v.vx, dir = Math.abs(sx) > Math.abs(v.vy) ? (sx > 0 ? "right" : "left") : (v.vy > 0 ? "down" : "up");
-        preds.push([`🔮 Hand moving ${dir} → will be there in 0.5 s`, "#ffd166"]);
         let best = null;
         for (const d of dets) { const c = d.categories[0].categoryName; if (c === "person") continue; const b = d.boundingBox, ox = b.originX + b.width / 2, oy = b.originY + b.height / 2;
           const dx = ox - p.x, dy = oy - p.y, dist = Math.hypot(dx, dy), cos = (dx * v.vx + dy * v.vy) / (dist * sp + 1e-6);
           if (cos > 0.8 && dist > 20 && (!best || cos > best.cos)) best = { c, cos, b, eta: dist / sp }; }
         if (best) { const b = best.b; ctx.save(); ctx.setLineDash([4, 4]); ctx.strokeStyle = "#ff4fd8"; ctx.lineWidth = 3; ctx.strokeRect(b.originX - 4, b.originY - 4, b.width + 8, b.height + 8); ctx.restore();
           label(`🎯 reaching for this? ${Math.round(best.cos * 100)}%`, b.originX + b.width, b.originY - 6, "#ff4fd8");
-          preds.push([`🔮 Reaching for the ${best.c} (${Math.round(best.cos * 100)}%, ~${best.eta.toFixed(1)} s)`, "#ff4fd8"]); X.prediction = `reaching for the ${best.c}`; }
-      } else preds.push(["🔮 Hand is steady", "#9aa5b1"]);
-    }
-  } else handHist.length = 0;
-  const person = dets.find(d => d.categories[0].categoryName === "person");
-  if (person) { const b = person.boundingBox; personHist.push({ x: b.originX + b.width / 2, y: b.originY, s: b.height, t: now }); const v = velOf(personHist, now);
-    if (v && Math.abs(v.vs) > 0.25) preds.push([`🔮 Person moving ${v.vs > 0 ? "toward" : "away from"} the camera`, "#ffd166"]); } else personHist.length = 0;
+          lines.push([`⚡ reaching for the ${best.c} · ${Math.round(best.cos * 100)}% · ${best.eta.toFixed(1)}s`, "#ff4fd8"]); X.prediction = `reaching for the ${best.c}`; }
+      } } } else handHist.length = 0;
   const things = [...dets.map(d => d.categories[0].categoryName), ...(heldCache.filter(x => x?.name).map(x => x.name.toLowerCase()))].join(" ");
-  const act = ACTIVITY.find(([re]) => re.test(things));
-  if (act) { preds.push([`🧩 Probably ${act[1]}`, "#3ddc84"]); if (!X.prediction?.startsWith("reaching")) X.prediction = act[1]; }
-  lines.push(...preds);
-  // --- real AI inner monologue (needs Gemini key) ---
-  if (opt.thoughtsAI && now - aiThoughtT > (aiThoughtErr ? 20000 : 12000)) geminiThought();
-  if (aiThought) { const k = Math.floor((now - aiThought.t) / 25);
-    lines.push(["💭 " + aiThought.thought.slice(0, k), "#bff3ff"]);
-    if (aiThought.prediction) lines.push([`🔮 AI predicts: ${aiThought.prediction.slice(0, Math.max(0, k - aiThought.thought.length))}${aiThought.conf ? ` (${aiThought.conf}%)` : ""}`, "#bff3ff"]); }
-  if (!opt.thoughtsAI) {}
-  else if (!$("geminiKey").value.trim()) lines.push(["💭 AI off: paste your Gemini key in Mode options ▸ Thoughts", "#ff9f0a"]);
-  else if (aiThoughtErr && !aiThoughtBusy) lines.push(["⚠ Gemini: " + aiThoughtErr, "#ff9f0a"]);
-  else if (aiThoughtBusy && !aiThought) lines.push(["💭 thinking" + ".".repeat(1 + Math.floor(now / 300) % 3), "#9aa5b1"]);
-  // --- draw the thought panel (bottom-right) ---
-  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const u = Math.min(h / 360, w / 420), fs = Math.round(12 * u), lh = fs + 6;
-  ctx.font = `bold ${fs}px -apple-system,sans-serif`; const maxW = w * 0.62;
-  const fit = s => { if (ctx.measureText(s).width <= maxW) return s; while (s.length > 3 && ctx.measureText(s + "…").width > maxW) s = s.slice(0, -1); return s + "…"; };
-  const L = [["🧠 JARVIS THOUGHTS & PREDICTIONS", "#2fd4ff"], ...lines].map(([t, c]) => [fit(t), c]);
-  const pw = Math.max(...L.map(([t]) => ctx.measureText(t).width)) + 18, ph = L.length * lh + 10, px = w - pw - 8, py = h - ph - 8;
-  ctx.fillStyle = "rgba(6,18,28,.72)"; ctx.fillRect(px, py, pw, ph); ctx.strokeStyle = "rgba(47,212,255,.6)"; ctx.strokeRect(px, py, pw, ph);
-  L.forEach(([t, c], i) => { ctx.fillStyle = c; ctx.fillText(t, px + 9, py + 5 + lh * (i + 0.75)); });
+  const act = ACTIVITY.find(([re]) => re.test(things)); if (act && !X.prediction) X.prediction = act[1];
+  // ---- AI mind ----
+  const key = !!$("geminiKey").value.trim();
+  if (opt.thoughtsAI && key && now - aiThoughtT > mindInterval()) geminiThought();
+  if (opt.mindBoxes) drawMindBoxes(now);
+  // ---- render panel ----
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const u = Math.min(h / 360, w / 420), pw = Math.min(w * 0.58, 330 * u), pad = 10 * u, inner = pw - pad * 2;
+  const rows = [];                                   // [kind, data]
+  const typed = aiThought ? Math.floor((now - aiThought.t) / 18) : 0;
+  ctx.font = `600 ${15 * u}px -apple-system,sans-serif`;
+  if (!opt.thoughtsAI) rows.push(["note", "AI monologue is off (Mode options)"]);
+  else if (!key) rows.push(["warn", "Paste your Gemini key in Mode options ▸ Thoughts"]);
+  else if (!aiThought) rows.push(["note", aiThoughtErr ? "⚠ " + aiThoughtErr : "Thinking" + ".".repeat(1 + Math.floor(now / 300) % 3)]);
+  if (aiThought) {
+    for (const l of wrapText("“" + aiThought.thought.slice(0, typed) + (typed < aiThought.thought.length ? "▍" : "”"), inner)) rows.push(["thought", l]);
+    const chips = [aiThought.mood && "🙂 " + aiThought.mood, aiThought.intent && "🎯 " + aiThought.intent, aiThought.attention && "👀 " + aiThought.attention].filter(Boolean);
+    if (chips.length) rows.push(["chips", chips]);
+    if (aiThought.changed) rows.push(["changed", "Δ " + aiThought.changed]);
+    for (const p of aiThought.preds) rows.push(["pred", p]);
+    if (aiThoughtErr) rows.push(["warn", "⚠ " + aiThoughtErr]);
+  }
+  if (opt.mindLocal) for (const [t, c] of lines.slice(0, 3)) rows.push(["local", t, c]);
+  const prevT = MIND.hist.length > 1 ? MIND.hist.at(-2).thought : ""; if (prevT && aiThought) rows.push(["prev", prevT]);
+  const RH = { thought: 19 * u, chips: 24 * u, changed: 17 * u, pred: 24 * u, local: 16 * u, prev: 16 * u, note: 18 * u, warn: 18 * u };
+  const ph = 34 * u + rows.reduce((s, r) => s + RH[r[0]], 0) + pad, px = w - pw - 8, py = h - ph - 8;
+  ctx.fillStyle = "rgba(10,12,18,.8)"; rr(px, py, pw, ph, 16 * u); ctx.fill();
+  const gl = ctx.createLinearGradient(px, py, px + pw, py); gl.addColorStop(0, "rgba(10,132,255,.9)"); gl.addColorStop(1, "rgba(191,90,242,.9)"); ctx.strokeStyle = gl; ctx.lineWidth = 1.5; ctx.stroke();
+  // header: pulsing brain, live dot, accuracy, countdown ring
+  const pulse = aiThoughtBusy ? 0.5 + 0.5 * Math.sin(now / 120) : 0.15;
+  ctx.fillStyle = `rgba(100,210,255,${0.4 + pulse * 0.6})`; ctx.beginPath(); ctx.arc(px + pad + 5 * u, py + 17 * u, 5 * u, 0, 7); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.font = `700 ${12 * u}px -apple-system,sans-serif`; ctx.fillText("JARVIS MIND", px + pad + 16 * u, py + 21 * u);
+  ctx.font = `500 ${11 * u}px -apple-system,sans-serif`; ctx.fillStyle = "#8e8e93";
+  const acc = MIND.total ? `${Math.round(MIND.hits / MIND.total * 100)}% right (${MIND.hits}/${MIND.total})` : aiThoughtBusy ? "thinking…" : aiThought ? `${(MIND.lastMs / 1000).toFixed(1)}s` : "";
+  ctx.textAlign = "right"; ctx.fillText(acc, px + pw - pad - 22 * u, py + 21 * u); ctx.textAlign = "left";
+  if (key && opt.thoughtsAI) { const k = Math.min(1, (now - aiThoughtT) / mindInterval()); const cx = px + pw - pad - 7 * u, cy = py + 17 * u;
+    ctx.strokeStyle = "rgba(255,255,255,.15)"; ctx.lineWidth = 2.5 * u; ctx.beginPath(); ctx.arc(cx, cy, 7 * u, 0, 7); ctx.stroke();
+    ctx.strokeStyle = aiThoughtBusy ? "#bf5af2" : "#64d2ff"; ctx.beginPath(); ctx.arc(cx, cy, 7 * u, -1.57, -1.57 + (aiThoughtBusy ? (now / 200) % 6.28 : k * 6.28)); ctx.stroke(); }
+  let y = py + 34 * u;
+  for (const r of rows) {
+    const H0 = RH[r[0]];
+    if (r[0] === "thought") { ctx.font = `600 ${14.5 * u}px -apple-system,sans-serif`; ctx.fillStyle = "#f5f5f7"; ctx.fillText(r[1], px + pad, y + 14 * u); }
+    else if (r[0] === "chips") { let x = px + pad; ctx.font = `500 ${11 * u}px -apple-system,sans-serif`;
+      for (const c of r[1]) { const tw = ctx.measureText(c).width + 14 * u; if (x + tw > px + pw - pad) break; ctx.fillStyle = "rgba(255,255,255,.1)"; rr(x, y + 3 * u, tw, 18 * u, 9 * u); ctx.fill(); ctx.fillStyle = "#d1d1d6"; ctx.fillText(c, x + 7 * u, y + 16 * u); x += tw + 6 * u; } }
+    else if (r[0] === "changed") { ctx.font = `500 ${11.5 * u}px -apple-system,sans-serif`; ctx.fillStyle = "#ffd60a"; ctx.fillText(r[1].slice(0, 70), px + pad, y + 12 * u); }
+    else if (r[0] === "pred") { const p = r[1], left = Math.max(0, Math.ceil((p.due - now) / 1000)), bw = inner * 0.32, bx = px + pw - pad - bw;
+      ctx.font = `500 ${12 * u}px -apple-system,sans-serif`; ctx.fillStyle = "#e5e5ea"; let t = "🔮 " + p.event; while (t.length > 4 && ctx.measureText(t).width > inner - bw - 8 * u) t = t.slice(0, -2) + "…"; ctx.fillText(t, px + pad, y + 15 * u);
+      ctx.fillStyle = "rgba(255,255,255,.1)"; rr(bx, y + 6 * u, bw, 12 * u, 6 * u); ctx.fill();
+      const g2 = ctx.createLinearGradient(bx, 0, bx + bw, 0); g2.addColorStop(0, "#0a84ff"); g2.addColorStop(1, "#bf5af2"); ctx.fillStyle = g2; rr(bx, y + 6 * u, Math.max(6 * u, bw * p.prob / 100), 12 * u, 6 * u); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.font = `700 ${9.5 * u}px -apple-system,sans-serif`; ctx.fillText(`${p.prob}%${p.secs ? " · " + (left ? left + "s" : "now") : ""}`, bx + 5 * u, y + 15.5 * u); }
+    else if (r[0] === "local") { ctx.font = `500 ${11 * u}px -apple-system,sans-serif`; ctx.fillStyle = r[2] || "#8e8e93"; let t = r[1]; while (t.length > 4 && ctx.measureText(t).width > inner) t = t.slice(0, -2) + "…"; ctx.fillText(t, px + pad, y + 12 * u); }
+    else if (r[0] === "prev") { ctx.font = `italic 500 ${11 * u}px -apple-system,sans-serif`; ctx.fillStyle = "rgba(142,142,147,.7)"; let t = "earlier: " + r[1]; while (t.length > 4 && ctx.measureText(t).width > inner) t = t.slice(0, -2) + "…"; ctx.fillText(t, px + pad, y + 12 * u); }
+    else { ctx.font = `500 ${12 * u}px -apple-system,sans-serif`; ctx.fillStyle = r[0] === "warn" ? "#ff9f0a" : "#8e8e93"; let t = r[1]; while (t.length > 4 && ctx.measureText(t).width > inner) t = t.slice(0, -2) + "…"; ctx.fillText(t, px + pad, y + 13 * u); }
+    y += H0;
+  }
   ctx.restore();
+  if (aiThought?.preds?.[0] && !X.prediction?.startsWith("reaching")) X.prediction = aiThought.preds[0].event;
 }
 // =================== AR INTERFACE: click things floating in the video with your hand ===================
 // Index finger = cursor. Pinch thumb + index = click (or hover 1 s). Pinch the title bar and move to drag a panel.
