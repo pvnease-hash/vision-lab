@@ -349,7 +349,12 @@ const SUBS = {
   ghost: () => [el("label", { class: "row" }, [el("small", {}, "Sensitivity"), el("input", { type: "range", min: 30, max: 300, value: Math.round(opt.ghostSens * 100), oninput: e => { opt.ghostSens = e.target.value / 100; saveOpt(); } })]),
     el("div", { class: "opts", style: "margin-top:6px" }, [chipT("↺ Recalibrate (keep still 3 s)", false, () => ghostRecalibrate()), chipT("Clear log", false, () => { GH.log = []; GH.events = 0; })]),
     el("small", {}, "Tip: put the camera on something steady. People, pets, hands and faces are ignored.")],
-  thoughts: () => [el("div", { class: "opts" }, [chipT("AI inner monologue (Gemini key)", opt.thoughtsAI, () => opt.thoughtsAI = !opt.thoughtsAI)])],
+  thoughts: () => [el("div", { class: "opts" }, [chipT("AI inner monologue", opt.thoughtsAI, () => opt.thoughtsAI = !opt.thoughtsAI)]),
+    el("small", { style: "display:block;margin-top:8px" }, "Gemini key (free at aistudio.google.com/apikey) — stays in this browser only"),
+    el("input", { type: "password", placeholder: "Paste Gemini key here", value: $("geminiKey").value, autocomplete: "off",
+      oninput: e => { $("geminiKey").value = e.target.value.trim(); store.set("geminiKey", e.target.value.trim()); aiThoughtErr = ""; aiThoughtT = 0; } }),
+    el("div", { class: "opts", style: "margin-top:6px" }, [el("button", { onclick: () => { $("thoughtKeyStatus").textContent = "Testing…"; aiThoughtT = 0; geminiThought(true); } }, "Test key now")]),
+    el("small", { id: "thoughtKeyStatus", style: "display:block;margin-top:4px" }, aiThoughtErr ? "✗ " + aiThoughtErr : aiThought ? "✓ Key works — thoughts are live" : "")],
   masks: () => [el("div", { class: "opts" }, MASKS.map(([k, n]) => chipT(n, opt.mask === k, () => opt.mask = k)))],
   clavmax: () => [el("div", { class: "opts" }, [chipT("Face geometry", opt.clavFace, () => opt.clavFace = !opt.clavFace), chipT("Shoulders / frame", opt.clavBody, () => { opt.clavBody = !opt.clavBody; if (opt.clavBody) ensure("pose"); })]),
     el("small", {}, "Measurements only, not a rating. Face the camera straight on in even light.")],
@@ -1217,25 +1222,37 @@ const ACTIVITY = [[/phone/, "using a phone"], [/cup|mug|bottle|glass|can\b|coffe
   [/toothbrush/, "brushing teeth"], [/scissors|pen|pencil/, "making something"], [/dog|cat/, "hanging out with a pet"], [/controller|joystick/, "gaming"]];
 function velOf(h, now) { while (h.length && now - h[0].t > 450) h.shift(); if (h.length < 3) return null; const a = h[0], b = h[h.length - 1], dt = (b.t - a.t) / 1000;
   return dt < 0.12 ? null : { vx: (b.x - a.x) / dt, vy: (b.y - a.y) / dt, ...(b.s != null ? { vs: (b.s - a.s) / dt / Math.max(1, a.s) } : {}) }; }
-async function geminiThought() {
-  const key = $("geminiKey").value.trim(); if (!key || aiThoughtBusy || (typeof liveOn !== "undefined" && liveOn) || busy) return;
-  aiThoughtBusy = true; aiThoughtT = performance.now();
+// Gemini call that works with both key styles: classic "AIza…" keys and newer "AQ.…" tokens (sent as Bearer)
+async function gemFetch(model, key, body) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  let r = await fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": key }, body });
+  if ([400, 401, 403].includes(r.status)) { const txt = await r.clone().text();
+    if (/api key|API_KEY|unauthenticated|credential/i.test(txt)) { const r2 = await fetch(url, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer " + key }, body }); if (r2.ok || r2.status === 404) return r2; } }
+  return r;
+}
+let aiThoughtErr = "";
+async function geminiThought(force) {
+  const key = $("geminiKey").value.trim(); if (!key || aiThoughtBusy || (!force && ((typeof liveOn !== "undefined" && liveOn) || busy))) return;
+  aiThoughtBusy = true; aiThoughtT = performance.now(); let ok = false;
   try {
     const img = snapshot();
     for (const [model, th] of [["gemini-flash-latest", true], ["gemini-flash-latest", false], ["gemini-2.5-flash", true]]) {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({ contents: [{ role: "user", parts: [...(img ? [{ inline_data: { mime_type: "image/jpeg", data: img } }] : []),
+      const r = await gemFetch(model, key,
+        JSON.stringify({ contents: [{ role: "user", parts: [...(img ? [{ inline_data: { mime_type: "image/jpeg", data: img } }] : []),
           { text: `You are JARVIS silently watching this live camera frame. Detectors report: ${sceneText()}. Reply ONLY as JSON: {"thought": "<your inner thought about what you see, max 14 words>", "prediction": "<what the person will most likely do in the next few seconds, max 12 words>", "confidence": <0-100>}` }] }],
-          generationConfig: { responseMimeType: "application/json", maxOutputTokens: 150, temperature: 0.7, ...(th ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }) });
-      if (r.status === 404 || (r.status === 400 && th)) continue;
-      const j = await r.json(); if (!r.ok) throw new Error(j.error?.message || r.status);
-      const ans = JSON.parse((j.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("") || "{}");
-      if (ans.thought) aiThought = { thought: String(ans.thought), prediction: String(ans.prediction || ""), conf: Math.round(+ans.confidence || 0), t: performance.now() };
+          generationConfig: { responseMimeType: "application/json", maxOutputTokens: 150, temperature: 0.7, ...(th ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }));
+      if (r.status === 404) continue;
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 400 && th && /thinking/i.test(j.error?.message || "")) continue;
+      if (!r.ok) throw new Error(j.error?.message || "HTTP " + r.status);
+      const txt = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("");
+      let ans = {}; try { ans = JSON.parse(txt.replace(/^```(json)?|```$/g, "").trim() || "{}"); } catch { ans = { thought: txt.slice(0, 120) }; }
+      if (ans.thought) { aiThought = { thought: String(ans.thought), prediction: String(ans.prediction || ""), conf: Math.round(+ans.confidence || 0), t: performance.now() }; ok = true; }
       break;
     }
-  } catch (e) { log("thought: " + e.message); }
-  aiThoughtBusy = false;
+    aiThoughtErr = ok ? "" : "Gemini answered but sent no thought — retrying";
+  } catch (e) { aiThoughtErr = e.message.replace(/\s+/g, " ").slice(0, 120); log("thought: " + e.message); }
+  aiThoughtBusy = false; const st = $("thoughtKeyStatus"); if (st) st.textContent = aiThoughtErr ? "✗ " + aiThoughtErr : aiThought ? "✓ Key works — thoughts are live" : "";
 }
 function drawThoughts(now) {
   X.prediction = ""; const lines = [], pct = v => Math.round(v * 100) + "%", w = W(), h = H();
@@ -1280,12 +1297,14 @@ function drawThoughts(now) {
   if (act) { preds.push([`🧩 Probably ${act[1]}`, "#3ddc84"]); if (!X.prediction?.startsWith("reaching")) X.prediction = act[1]; }
   lines.push(...preds);
   // --- real AI inner monologue (needs Gemini key) ---
-  if (now - aiThoughtT > 12000) geminiThought();
+  if (opt.thoughtsAI && now - aiThoughtT > (aiThoughtErr ? 20000 : 12000)) geminiThought();
   if (aiThought) { const k = Math.floor((now - aiThought.t) / 25);
     lines.push(["💭 " + aiThought.thought.slice(0, k), "#bff3ff"]);
     if (aiThought.prediction) lines.push([`🔮 AI predicts: ${aiThought.prediction.slice(0, Math.max(0, k - aiThought.thought.length))}${aiThought.conf ? ` (${aiThought.conf}%)` : ""}`, "#bff3ff"]); }
-  else if (!$("geminiKey").value.trim()) lines.push(["💭 Add a Gemini key for real AI thoughts", "#9aa5b1"]);
-  else if (aiThoughtBusy) lines.push(["💭 thinking" + ".".repeat(1 + Math.floor(now / 300) % 3), "#9aa5b1"]);
+  if (!opt.thoughtsAI) {}
+  else if (!$("geminiKey").value.trim()) lines.push(["💭 AI off: paste your Gemini key in Mode options ▸ Thoughts", "#ff9f0a"]);
+  else if (aiThoughtErr && !aiThoughtBusy) lines.push(["⚠ Gemini: " + aiThoughtErr, "#ff9f0a"]);
+  else if (aiThoughtBusy && !aiThought) lines.push(["💭 thinking" + ".".repeat(1 + Math.floor(now / 300) % 3), "#9aa5b1"]);
   // --- draw the thought panel (bottom-right) ---
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const u = Math.min(h / 360, w / 420), fs = Math.round(12 * u), lh = fs + 6;
   ctx.font = `bold ${fs}px -apple-system,sans-serif`; const maxW = w * 0.62;
@@ -2196,9 +2215,7 @@ async function gemini(q, scene) {
   for (const model of ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]) {
     for (const thinking of [true, false]) {
       const gen = { maxOutputTokens: 400, temperature: 0.8, ...(thinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}) };
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-        method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({ system_instruction: { parts: [{ text: SYSTEM }] }, contents, generationConfig: gen }) });
+      const r = await gemFetch(model, key, JSON.stringify({ system_instruction: { parts: [{ text: SYSTEM }] }, contents, generationConfig: gen }));
       const j = await r.json().catch(() => ({}));
       if (r.ok) { const t = (j.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("").trim(); if (t) return t; }
       const msg = j.error?.message || ("HTTP " + r.status);
