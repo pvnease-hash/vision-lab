@@ -94,6 +94,7 @@
 <header>
   <h1>VISION <span>LAB</span></h1>
   <div id="status">Click “Start camera”.</div>
+  <button id="camBtn" class="on" style="padding:6px 12px;border-radius:999px;font-size:12px;min-height:0">📷 Camera on</button>
   <div class="seg" id="unitSeg"><button data-u="us">ft · in</button><button data-u="metric">m · cm</button></div>
 </header>
 <main>
@@ -247,7 +248,7 @@ const OPT_DEFAULTS = { units: "us", favModes: ["objects", "hands", "draw", "work
   objCats: {}, objMin: 0.4, handSkel: true, handLabels: true, handTips: true,
   ex: "squat", exFavs: ["squat", "pushup", "curl", "jacks"], repVoice: true, distCal: 1, depthObjLabels: true,
   counterClass: "person", ghostSens: 1, thoughtsAI: true, mask: "shades", clavFace: true, clavBody: true,
-  brush: "neon", mirrorDraw: false, holoModel: "rocket", holoSolid: true, holoColor: "#64d2ff", mindSpeed: "normal", mindModel: "fast", mindBoxes: true, mindSpeak: false, mindLocal: true, intruderSound: true, trailLen: 0.75, laserColor: "#ff2d2d" };
+  brush: "neon", mirrorDraw: false, holoModel: "rocket", holoSolid: true, holoColor: "#64d2ff", exprBars: true, mindSpeed: "normal", mindModel: "fast", mindBoxes: true, mindSpeak: false, mindLocal: true, intruderSound: true, trailLen: 0.75, laserColor: "#ff2d2d" };
 const opt = Object.assign({}, OPT_DEFAULTS, store.get("opts", {}));
 function saveOpt() { store.set("opts", opt); }
 const el = (tag, props = {}, kids = []) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(props)) { if (k === "style") e.style.cssText = v; else if (k.startsWith("on")) e[k] = v; else if (k === "html") e.innerHTML = v; else e.setAttribute(k, v); } for (const c of [].concat(kids)) if (c != null) e.append(c); return e; };
@@ -304,6 +305,7 @@ async function setupSortable() {
 function toggle(key) {
   if (key === "filter") { filterIdx = (filterIdx + 1) % FILTERS.length; store.set("filter", filterIdx); renderModes(); return; }
   active.has(key) ? active.delete(key) : active.add(key);
+  if (key === "expr" && active.has("expr")) exprCalibrate();
   store.set("modes", [...active]); renderModes(); ensure(key);
 }
 // ---------- per-mode option cards ----------
@@ -334,6 +336,8 @@ const SUBS = {
   ghost: () => [el("label", { class: "row" }, [el("small", {}, "Sensitivity"), el("input", { type: "range", min: 30, max: 300, value: Math.round(opt.ghostSens * 100), oninput: e => { opt.ghostSens = e.target.value / 100; saveOpt(); } })]),
     el("div", { class: "opts", style: "margin-top:6px" }, [chipT("↺ Recalibrate (keep still 3 s)", false, () => ghostRecalibrate()), chipT("Clear log", false, () => { GH.log = []; GH.events = 0; })]),
     el("small", {}, "Tip: put the camera on something steady. People, pets, hands and faces are ignored.")],
+  expr: () => [el("div", { class: "opts" }, [chipT("↺ Calibrate my resting face (relax 2 s)", false, () => exprCalibrate()), chipT("Top-4 bars", opt.exprBars, () => opt.exprBars = !opt.exprBars)]),
+    el("small", {}, "Knows 20 expressions: " + EXPRS.map(e => e[1]).join(" "))],
   thoughts: () => [el("div", { class: "opts" }, [chipT("🧠 AI mind", opt.thoughtsAI, () => opt.thoughtsAI = !opt.thoughtsAI), chipT("📦 AI boxes", opt.mindBoxes, () => opt.mindBoxes = !opt.mindBoxes),
       chipT("🔊 Speak thoughts", opt.mindSpeak, () => opt.mindSpeak = !opt.mindSpeak), chipT("⚡ On-device signals", opt.mindLocal, () => opt.mindLocal = !opt.mindLocal)]),
     el("small", { style: "display:block;margin-top:8px" }, "Think every"),
@@ -2097,33 +2101,84 @@ function drawTracks(list, now, colorOf) {
     box(it.x, it.y, it.w, it.h, col); label(it.text || it.label, it.x + it.w, it.y, col); ctx.globalAlpha = 1;
   }
 }
-// --- facial expressions from the 52 face "blendshape" muscle scores ---
-const EMO = { Happy: "😊", Surprised: "😮", Sad: "😢", Angry: "😠", Disgusted: "🤢", Neutral: "😐" };
-let emoSmooth = [];
-function emotionScores(bs) {
-  const g = n => bs.find(c => c.categoryName === n)?.score || 0, avg = (a, b) => (g(a) + g(b)) / 2;
-  return {
-    Happy: avg("mouthSmileLeft", "mouthSmileRight") * 1.2,
-    Surprised: (g("browInnerUp") * 0.4 + avg("browOuterUpLeft", "browOuterUpRight") * 0.4 + g("jawOpen") * 0.5 + avg("eyeWideLeft", "eyeWideRight") * 0.4),
-    Sad: avg("mouthFrownLeft", "mouthFrownRight") * 0.9 + g("browInnerUp") * 0.3 - avg("mouthSmileLeft", "mouthSmileRight") * 0.5,
-    Angry: avg("browDownLeft", "browDownRight") * 0.9 + avg("mouthPressLeft", "mouthPressRight") * 0.3,
-    Disgusted: avg("noseSneerLeft", "noseSneerRight") * 1.1 + g("mouthUpperUpLeft") * 0.2,
-    Neutral: 0.22,
+// --- facial expressions: 20 expressions from the 52 face "blendshape" muscle scores ---
+// Calibrated to YOUR resting face (relax for 2 s when you turn it on), smoothed, and the label only
+// switches once a new expression clearly wins for several frames, so it doesn't flicker.
+const EXPRS = [
+  ["Smiling", "😊"], ["Laughing", "😂"], ["Grinning", "😁"], ["Smirk", "😏"], ["Surprised", "😮"], ["Shocked", "😱"], ["Sad", "😢"], ["Angry", "😠"],
+  ["Disgusted", "🤢"], ["Scared", "😨"], ["Confused", "🤨"], ["Kissy face", "😗"], ["Wink", "😉"], ["Eyes closed", "😌"], ["Sleepy", "😴"], ["Yawning", "🥱"],
+  ["Puffed cheeks", "🐡"], ["Pouting", "🥺"], ["Focused", "🧐"], ["Grimace", "😬"], ["Neutral", "😐"]];
+const EMO = Object.fromEntries(EXPRS);
+const EX = { base: null, calib: [], calibUntil: 0, faces: [] };
+function exprCalibrate() { EX.base = null; EX.calib = []; EX.calibUntil = performance.now() + 2000; }
+function emotionScores(bs, st) {
+  const raw = {}; for (const c of bs) raw[c.categoryName] = c.score;
+  const g = n => Math.max(0, (raw[n] || 0) - (EX.base?.[n] || 0) * 0.85), avg = (a, b) => (g(a) + g(b)) / 2;
+  const smile = avg("mouthSmileLeft", "mouthSmileRight"), jaw = g("jawOpen"), wide = avg("eyeWideLeft", "eyeWideRight"), squint = avg("eyeSquintLeft", "eyeSquintRight");
+  const browUp = g("browInnerUp"), browOut = avg("browOuterUpLeft", "browOuterUpRight"), browDown = avg("browDownLeft", "browDownRight");
+  const blinkL = raw.eyeBlinkLeft || 0, blinkR = raw.eyeBlinkRight || 0, blink = (blinkL + blinkR) / 2, frown = avg("mouthFrownLeft", "mouthFrownRight");
+  const cheekSq = avg("cheekSquintLeft", "cheekSquintRight"), stretch = avg("mouthStretchLeft", "mouthStretchRight"), press = avg("mouthPressLeft", "mouthPressRight");
+  const sneer = avg("noseSneerLeft", "noseSneerRight"), upperUp = avg("mouthUpperUpLeft", "mouthUpperUpRight"), pucker = g("mouthPucker"), funnel = g("mouthFunnel");
+  const s = {
+    Smiling: smile * 1.1 - jaw * 0.3,
+    Laughing: smile > 0.35 ? smile * 0.5 + jaw * 0.7 + cheekSq * 0.3 : 0,
+    Grinning: smile > 0.4 ? smile * 0.6 + upperUp * 0.4 + stretch * 0.3 - jaw * 0.3 : 0,
+    Smirk: Math.max(g("mouthSmileLeft"), g("mouthSmileRight")) > 0.25 ? Math.abs(g("mouthSmileLeft") - g("mouthSmileRight")) * 1.8 : 0,
+    Surprised: browUp * 0.35 + browOut * 0.4 + wide * 0.5 + jaw * 0.3 - smile * 0.3,
+    Shocked: jaw > 0.45 ? jaw * 0.6 + wide * 0.6 + browOut * 0.2 : 0,
+    Sad: frown * 0.9 + browUp * 0.45 + g("mouthShrugLower") * 0.2 - smile * 0.7,
+    Angry: browDown * 0.95 + press * 0.3 + squint * 0.2 + sneer * 0.2 - smile * 0.5,
+    Disgusted: sneer * 1.1 + upperUp * 0.45 - smile * 0.3,
+    Scared: browUp * 0.45 + wide * 0.5 + stretch * 0.55 - smile * 0.4,
+    Confused: Math.abs(g("browOuterUpLeft") - g("browOuterUpRight")) * 1.4 + Math.abs(g("browDownLeft") - g("browDownRight")) * 1.2 + press * 0.15,
+    "Kissy face": pucker * 0.95 + funnel * 0.35,
+    Wink: Math.abs(blinkL - blinkR) > 0.35 && Math.max(blinkL, blinkR) > 0.55 ? Math.abs(blinkL - blinkR) * 1.1 : 0,
+    "Eyes closed": blinkL > 0.5 && blinkR > 0.5 ? blink * 0.8 : 0,
+    Sleepy: blinkL > 0.5 && blinkR > 0.5 && st.closedFor > 2000 ? 0.95 : 0,
+    Yawning: jaw > 0.55 && blink > 0.3 && st.jawFor > 900 ? jaw * 0.9 + blink * 0.3 : 0,
+    "Puffed cheeks": g("cheekPuff") * 1.3,
+    Pouting: g("mouthShrugLower") * 0.6 + g("mouthRollLower") * 0.3 + pucker * 0.25 + browUp * 0.2 - smile * 0.4,
+    Focused: squint * 0.55 + browDown * 0.35 - smile * 0.3 - jaw * 0.3,
+    Grimace: stretch * 0.7 + upperUp * 0.25 + press * 0.2 - jaw * 0.2,
+    Neutral: 0.2,
   };
+  for (const k in s) s[k] = Math.max(0, s[k]);
+  return { s, intensity: Math.min(1, smile + jaw + browUp + browDown + frown + sneer + pucker) };
 }
 function drawExpressions(now) {
   const faces = R.mesh.faceLandmarks || [], shapes = R.mesh.faceBlendshapes || [];
+  // learn the resting face
+  if (now < EX.calibUntil && shapes[0]) { EX.calib.push(Object.fromEntries(shapes[0].categories.map(c => [c.categoryName, c.score]))); }
+  else if (EX.calibUntil && !EX.base && EX.calib.length) { const b = {}; for (const f of EX.calib) for (const k in f) b[k] = (b[k] || 0) + f[k] / EX.calib.length; EX.base = b; EX.calibUntil = 0; }
   const tags = [];
   faces.forEach((lm, i) => {
     const bs = shapes[i]?.categories; if (!bs) return;
-    const sc = emotionScores(bs), prev = emoSmooth[i] || sc;
-    for (const k in sc) sc[k] = prev[k] + (sc[k] - prev[k]) * 0.25;      // smooth so it doesn't flicker
-    emoSmooth[i] = sc;
-    const [name] = Object.entries(sc).sort((a, b) => b[1] - a[1])[0];
-    tags.push(name.toLowerCase());
+    const st = EX.faces[i] ||= { sm: null, cur: "Neutral", cand: "", candN: 0, closedFor: 0, closedT: 0, jawFor: 0, jawT: 0 };
+    const raw = Object.fromEntries(bs.map(c => [c.categoryName, c.score]));
+    if ((raw.eyeBlinkLeft || 0) > 0.5 && (raw.eyeBlinkRight || 0) > 0.5) { st.closedT ||= now; st.closedFor = now - st.closedT; } else { st.closedT = 0; st.closedFor = 0; }
+    if ((raw.jawOpen || 0) > 0.55) { st.jawT ||= now; st.jawFor = now - st.jawT; } else { st.jawT = 0; st.jawFor = 0; }
+    const { s } = emotionScores(bs, st);
+    st.sm = st.sm ? Object.fromEntries(Object.entries(s).map(([k, v]) => [k, st.sm[k] + (v - st.sm[k]) * 0.3])) : s;
+    const ranked = Object.entries(st.sm).sort((a, b) => b[1] - a[1]);
+    const [top, topV] = ranked[0], curV = st.sm[st.cur] ?? 0;
+    if (top !== st.cur && topV > curV + 0.04) { if (st.cand === top) st.candN++; else { st.cand = top; st.candN = 1; } if (st.candN >= 4) { st.cur = top; st.candN = 0; } } else st.candN = 0;
+    const tot = ranked.slice(0, 4).reduce((a, [, v]) => a + v, 0) || 1, pct = v => Math.round(v / tot * 100);
+    tags.push(st.cur.toLowerCase());
     let minX = 1, minY = 1, maxX = 0; for (const p of lm) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x; if (p.y < minY) minY = p.y; }
-    label(`${EMO[name]} ${name}`, maxX * W(), Math.max(22, minY * H() - 6), "#ffd166");
+    label(`${EMO[st.cur]} ${st.cur} ${pct(st.sm[st.cur])}%`, maxX * W(), Math.max(22, minY * H() - 6), "#ffd60a");
+    if (i === 0 && opt.exprBars) {                      // top-4 breakdown with bars
+      ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const u = Math.min(H() / 360, W() / 420), x = leftX(), y = H() - 118 * u, w = 190 * u;
+      ctx.fillStyle = "rgba(20,20,24,.75)"; rr(x, y, w, 110 * u, 12 * u); ctx.fill();
+      ctx.font = `700 ${11 * u}px -apple-system,sans-serif`; ctx.fillStyle = "#8e8e93";
+      ctx.fillText(now < EX.calibUntil ? "CALIBRATING… relax your face" : EX.base ? "EXPRESSION · calibrated" : "EXPRESSION", x + 10 * u, y + 17 * u);
+      ranked.slice(0, 4).forEach(([k, v], j) => { const yy = y + 28 * u + j * 20 * u;
+        ctx.font = `600 ${12 * u}px -apple-system,sans-serif`; ctx.fillStyle = k === st.cur ? "#fff" : "#aeaeb2"; ctx.fillText(`${EMO[k]} ${k}`, x + 10 * u, yy + 11 * u);
+        ctx.fillStyle = "rgba(255,255,255,.1)"; rr(x + 112 * u, yy + 2 * u, 68 * u, 10 * u, 5 * u); ctx.fill();
+        ctx.fillStyle = k === st.cur ? "#ffd60a" : "#0a84ff"; rr(x + 112 * u, yy + 2 * u, Math.max(4 * u, 68 * u * pct(v) / 100), 10 * u, 5 * u); ctx.fill(); });
+      ctx.restore();
+    }
   });
+  EX.faces.length = faces.length;
   seen.expr = tags;
 }
 function drawResults() {
@@ -2796,6 +2851,21 @@ $("flip").onclick = async () => {
   facing = facing === "user" ? "environment" : "user";
   try { await openCamera(); } catch (e) { setStatus("Couldn't switch camera: " + e.message); }
 };
+// camera on / off (turning it off stops the camera light and all vision work)
+let camOn = true;
+function camOffScreen() {
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W(), H());
+  ctx.fillStyle = "#8e8e93"; ctx.textAlign = "center"; ctx.font = "600 22px -apple-system,sans-serif"; ctx.fillText("📷 Camera off", W() / 2, H() / 2);
+  ctx.font = "14px -apple-system,sans-serif"; ctx.fillText("Tap “Camera off” at the top to turn it back on", W() / 2, H() / 2 + 28); ctx.restore();
+}
+function setCamBtn() { const b = $("camBtn"); b.className = camOn && started ? "on" : ""; b.textContent = camOn && started ? "📷 Camera on" : "📷 Camera off"; }
+$("camBtn").onclick = async () => {
+  if (!started) { $("start").click(); return; }
+  if (camOn) { if (video.srcObject) video.srcObject.getTracks().forEach(t => t.stop()); video.srcObject = null; camOn = false; R.objects = []; R.faces = []; R.hands = null; R.pose = null; R.mesh = null; handSmooth = []; setTimeout(camOffScreen, 50); setStatus("Camera off."); }
+  else { try { await openCamera(); camOn = true; setStatus("Camera on."); } catch (e) { setStatus("Couldn't turn the camera on: " + e.message); } }
+  setCamBtn();
+};
+setCamBtn();
 $("start").onclick = async () => {
   unlockAudio();                                                       // unlock sound while we still have the tap
   if (!navigator.mediaDevices?.getUserMedia) { setStatus("This browser can't use the camera here. Open the page from its https link in Safari or Chrome."); return; }
@@ -2807,6 +2877,7 @@ $("start").onclick = async () => {
   draw = new DrawingUtils(ctx);
   for (const k of active) await ensure(k);
   setStatus("Running. Turn modes on and off with the buttons.");
+  camOn = true; setCamBtn();
   loop();
   if (store.get("liveAuto", true) && $("geminiKey").value.trim() && !liveOn) liveStart();   // go straight into Live
 };
