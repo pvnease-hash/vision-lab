@@ -7,25 +7,18 @@
 <meta name="apple-mobile-web-app-title" content="Vision Lab">
 <meta name="theme-color" content="#0b0f14">
 <title>Vision Lab</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&display=swap" rel="stylesheet">
 <style>
   :root { --bg:#000; --bg2:#0b0b0f; --panel:rgba(28,28,32,.72); --panel2:rgba(44,44,50,.7); --line:rgba(255,255,255,.09); --text:#f5f5f7; --muted:#8e8e93;
           --accent:#0a84ff; --accent2:#64d2ff; --on:#0a84ff; --good:#30d158; --warn:#ff9f0a; --bad:#ff453a; --radius:18px;
           --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Inter,sans-serif; --head:var(--font); }
-  [data-theme="soviet"] { --bg:#0d0303; --bg2:#1a0505; --panel:rgba(48,8,8,.78); --panel2:rgba(80,14,14,.75); --line:rgba(255,204,51,.18); --text:#fff3d6; --muted:#c9a46a;
-          --accent:#d81e1e; --accent2:#ffcc33; --on:#c41414; --good:#ffcc33; --radius:4px; --head:"Oswald","Arial Narrow","Impact",sans-serif; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   html { background:var(--bg); }
   body { margin:0; min-height:100vh; color:var(--text); font:14px/1.45 var(--font); -webkit-font-smoothing:antialiased; letter-spacing:-.01em;
          background: radial-gradient(1200px 600px at 10% -10%, rgba(10,132,255,.16), transparent 60%), radial-gradient(900px 500px at 110% 10%, rgba(191,90,242,.12), transparent 60%), var(--bg); }
-  [data-theme="soviet"] body { background: repeating-linear-gradient(135deg, rgba(216,30,30,.05) 0 40px, transparent 40px 80px), radial-gradient(900px 500px at 0% 0%, rgba(216,30,30,.22), transparent 60%), var(--bg); }
   header { position:sticky; top:0; z-index:40; padding:12px 18px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
            background:rgba(0,0,0,.55); backdrop-filter:saturate(180%) blur(20px); -webkit-backdrop-filter:saturate(180%) blur(20px); border-bottom:1px solid var(--line); }
-  [data-theme="soviet"] header { background:rgba(60,4,4,.8); border-bottom:3px solid var(--accent2); }
   h1 { font:700 19px/1 var(--head); margin:0; letter-spacing:-.02em; }
   h1 span { background:linear-gradient(90deg,var(--accent),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  [data-theme="soviet"] h1 { text-transform:uppercase; letter-spacing:.12em; font-size:22px; }
-  [data-theme="soviet"] h1::before { content:"★ "; color:var(--accent2); }
   #status { color:var(--muted); font-size:13px; flex:1; min-width:160px; }
   .seg { display:inline-flex; background:var(--panel2); border-radius:10px; padding:2px; border:1px solid var(--line); }
   .seg button { background:transparent; border:0; padding:5px 12px; border-radius:8px; font-size:12px; color:var(--muted); min-height:0; text-align:center; }
@@ -33,19 +26,14 @@
   main { display:flex; gap:18px; padding:18px; flex-wrap:wrap; align-items:flex-start; }
   #stage { position:relative; flex:1 1 640px; max-width:1000px; }
   #out { width:100%; border-radius:var(--radius); background:#000; display:block; box-shadow:0 20px 60px rgba(0,0,0,.55), 0 0 0 1px var(--line); }
-  [data-theme="soviet"] #out { box-shadow:0 0 0 3px var(--accent), 0 0 0 6px var(--accent2), 0 20px 60px rgba(0,0,0,.6); }
   aside { flex:0 1 340px; display:flex; flex-direction:column; gap:14px; min-width:280px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:14px; backdrop-filter:blur(24px) saturate(160%); -webkit-backdrop-filter:blur(24px) saturate(160%); }
-  [data-theme="soviet"] .card { border-left:4px solid var(--accent); }
   .card h2 { font:600 12px/1 var(--head); text-transform:uppercase; color:var(--muted); margin:0 0 10px; letter-spacing:.08em; display:flex; align-items:center; gap:8px; }
-  [data-theme="soviet"] .card h2 { color:var(--accent2); font-size:14px; letter-spacing:.14em; }
   .grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
   button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:12px; padding:9px 10px; font:500 13px/1.2 var(--font); cursor:pointer; text-align:left; transition:background .15s, transform .1s, box-shadow .15s; }
   button:hover { background:rgba(255,255,255,.12); }
   button:active { transform:scale(.97); }
   button.on { background:var(--on); border-color:transparent; color:#fff; box-shadow:0 4px 14px rgba(10,132,255,.35); }
-  [data-theme="soviet"] button { border-radius:2px; text-transform:uppercase; font-family:var(--head); letter-spacing:.04em; }
-  [data-theme="soviet"] button.on { box-shadow:0 0 0 1px var(--accent2) inset; }
   button kbd { float:right; color:var(--muted); font:11px var(--font); opacity:.8; }
   button.on kbd { color:rgba(255,255,255,.75); }
   input, select { width:100%; background:rgba(0,0,0,.35); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:9px 11px; font:inherit; outline:none; }
@@ -106,7 +94,6 @@
 <header>
   <h1>VISION <span>LAB</span></h1>
   <div id="status">Click “Start camera”.</div>
-  <div class="seg" id="themeSeg"><button data-t="apple">Apple</button><button data-t="soviet">★ Soviet</button></div>
   <div class="seg" id="unitSeg"><button data-u="us">ft · in</button><button data-u="metric">m · cm</button></div>
 </header>
 <main>
@@ -256,7 +243,7 @@ let draw, facing = "user", mirror = true, started = false;
 // ---------- UI ----------
 function setStatus(t) { $("status").textContent = t; }
 // ---------- options for every mode (saved in this browser) ----------
-const OPT_DEFAULTS = { units: "us", theme: "apple", favModes: ["objects", "hands", "draw", "workout"], modeOrder: [], modeCat: "All",
+const OPT_DEFAULTS = { units: "us", favModes: ["objects", "hands", "draw", "workout"], modeOrder: [], modeCat: "All",
   objCats: {}, objMin: 0.4, handSkel: true, handLabels: true, handTips: true,
   ex: "squat", exFavs: ["squat", "pushup", "curl", "jacks"], repVoice: true, distCal: 1, depthObjLabels: true,
   counterClass: "person", ghostSens: 1, thoughtsAI: true, mask: "shades", clavFace: true, clavBody: true,
@@ -272,10 +259,8 @@ function fmtLen(m, short) {
   const ft = Math.floor(inches / 12), inch = Math.round(inches - ft * 12);
   return inch === 12 ? `${ft + 1} ft` : inch === 0 ? `${ft} ft` : short ? `${ft}′${inch}″` : `${ft} ft ${inch} in`;
 }
-function applyTheme() { document.documentElement.dataset.theme = opt.theme;
-  for (const b of document.querySelectorAll("#themeSeg button")) b.className = b.dataset.t === opt.theme ? "on" : "";
+function applyTheme() { delete document.documentElement.dataset.theme;
   for (const b of document.querySelectorAll("#unitSeg button")) b.className = b.dataset.u === opt.units ? "on" : ""; }
-for (const b of document.querySelectorAll("#themeSeg button")) b.onclick = () => { opt.theme = b.dataset.t; saveOpt(); applyTheme(); };
 for (const b of document.querySelectorAll("#unitSeg button")) b.onclick = () => { opt.units = b.dataset.u; saveOpt(); applyTheme(); renderSubs(); };
 applyTheme();
 function orderedModes() {
