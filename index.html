@@ -789,9 +789,40 @@ function drawExtras(now) {
 
 // =================== EVEN MORE MODES ===================
 // which fingers are up (works at any hand angle: a finger is "up" when its tip is farther from the wrist than its middle joint)
+// A finger counts as "up" when its joints are nearly straight (3D joint angles) AND its tip is farther from the
+// wrist than its middle joint. Works at any hand angle and distance.
+function ang3(a, b, c) { const v1 = [a.x - b.x, a.y - b.y, (a.z - b.z) || 0], v2 = [c.x - b.x, c.y - b.y, (c.z - b.z) || 0];
+  const dot = v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2], m = Math.hypot(...v1) * Math.hypot(...v2) + 1e-9;
+  return Math.acos(Math.max(-1, Math.min(1, dot / m))) * 180 / Math.PI; }
 function fingersUp(lm) {
-  const d = (a, b) => Math.hypot(lm[a].x - lm[b].x, lm[a].y - lm[b].y);
-  return [d(4, 17) > d(3, 17) * 1.1 && d(4, 5) > d(3, 5) * 0.9, d(8, 0) > d(6, 0) * 1.15, d(12, 0) > d(10, 0) * 1.15, d(16, 0) > d(14, 0) * 1.15, d(20, 0) > d(18, 0) * 1.15];
+  const d = (a, b) => Math.hypot(lm[a].x - lm[b].x, lm[a].y - lm[b].y), size = d(0, 9) || 0.1;
+  const finger = (m, p, q, t) => ang3(lm[m], lm[p], lm[q]) > 145 && ang3(lm[p], lm[q], lm[t]) > 130 && ang3(lm[0], lm[m], lm[p]) > 115 && d(t, 0) > d(p, 0) * 1.05;
+  const thumb = ang3(lm[2], lm[3], lm[4]) > 140 && d(4, 9) > d(3, 9) * 1.05 && d(4, 5) / size > 0.42;
+  return [thumb, finger(5, 6, 7, 8), finger(9, 10, 11, 12), finger(13, 14, 15, 16), finger(17, 18, 19, 20)];
+}
+// Gesture = Google's trained recogniser when it's confident, plus extra shapes it doesn't know
+// (OK, rock, call-me, pinch, finger counts), then a 6-frame vote so labels don't flicker.
+const GEMOJI = { "Open hand": "✋", "Fist": "✊", "Pointing up": "☝️", "Thumbs up": "👍", "Thumbs down": "👎", "Peace": "✌️", "I love you": "🤟",
+  "OK": "👌", "Rock on": "🤘", "Call me": "🤙", "Pinch": "🤏", "Three": "3️⃣", "Four": "4️⃣", "Hand": "🖐" };
+function classifyHand(lm, rec) {
+  const up = fingersUp(lm), n = up.filter(Boolean).length, d = (a, b) => Math.hypot(lm[a].x - lm[b].x, lm[a].y - lm[b].y), size = d(0, 9) || 0.1;
+  const pinch = d(4, 8) / size < 0.32, [T, I, M, Rg, P] = up;
+  let mine = null;
+  if (pinch && M && Rg && P) mine = "OK";
+  else if (pinch && !M && !Rg) mine = "Pinch";
+  else if (I && P && !M && !Rg) mine = T ? "I love you" : "Rock on";
+  else if (T && P && !I && !M && !Rg) mine = "Call me";
+  else if (I && M && !Rg && !P) mine = "Peace";
+  else if (I && !M && !Rg && !P) mine = "Pointing up";
+  else if (I && M && Rg && !P) mine = "Three";
+  else if (I && M && Rg && P && !T) mine = "Four";
+  else if (n === 5) mine = "Open hand";
+  else if (!I && !M && !Rg && !P) mine = T ? (lm[4].y < lm[2].y - size * 0.3 ? "Thumbs up" : lm[4].y > lm[2].y + size * 0.3 ? "Thumbs down" : "Fist") : "Fist";
+  const rn = NICE[rec?.categoryName], rs = rec?.score || 0;
+  // trust the trained model when it is sure and agrees with the finger shape, or for its specialities
+  if (rn && rn !== "Hand" && rs > 0.75 && (!mine || ["Thumbs up", "Thumbs down", "I love you"].includes(rn) || rn === mine)) return { g: rn, conf: rs, up };
+  if (mine) return { g: mine, conf: rn === mine ? Math.max(rs, 0.85) : 0.7, up };
+  return { g: rn && rs > 0.6 ? rn : "Hand", conf: rs, up };
 }
 function drawFingers() {
   let total = 0;
@@ -1273,16 +1304,22 @@ function drawResults() {
   if ((active.has("hands") || active.has("draw") || active.has("fingers") || active.has("ar") || active.has("thoughts")) && R.hands) {
     const r = R.hands; seen.gestures = []; const showHands = active.has("hands");
     if (r !== lastHandRes) { lastHandRes = r;
-      handSmooth = r.landmarks.map((lm, i) => { const prev = handSmooth[i];
-        return { side: r.handedness[i]?.[0]?.categoryName || "Hand", g: NICE[r.gestures[i]?.[0]?.categoryName] || "Hand",
-                 target: lm, cur: prev && prev.cur.length === lm.length ? prev.cur : lm.map(p => ({ ...p })) }; }); }
+      handSmooth = r.landmarks.map((lm, i) => { const prev = handSmooth[i], side = r.handedness[i]?.[0]?.categoryName || "Hand";
+        const same = prev && prev.side === side, c = classifyHand(lm, r.gestures[i]?.[0]);
+        const hist = same ? prev.hist.slice(-5) : []; hist.push(c.g);
+        const votes = {}; for (const x of hist) votes[x] = (votes[x] || 0) + 1;
+        const top = Object.entries(votes).sort((a, b) => b[1] - a[1])[0];
+        const g = top[1] >= Math.min(3, hist.length) ? top[0] : (same ? prev.g : c.g);       // only switch label once it's consistent
+        return { side, g, conf: c.conf, up: c.up, hist, target: lm, cur: prev && prev.cur.length === lm.length ? prev.cur : lm.map(p => ({ ...p })) }; }); }
     for (const h of handSmooth) {
       h.cur = h.cur.map((p, j) => ({ x: p.x + (h.target[j].x - p.x) * 0.35, y: p.y + (h.target[j].y - p.y) * 0.35, z: h.target[j].z }));
       seen.gestures.push(h.g);
       if (!showHands) continue;
       draw.drawConnectors(h.cur, GestureRecognizer.HAND_CONNECTIONS, { color: "#ff4fd8", lineWidth: 3 });
       draw.drawLandmarks(h.cur, { color: "#fff", radius: 2 });
-      label(`${h.side}: ${h.g}`, h.cur[0].x * W() + 40, h.cur[0].y * H() + 40, "#ff4fd8");
+      label(`${h.side}: ${GEMOJI[h.g] || ""} ${h.g} ${Math.round((h.conf || 0) * 100)}%`, h.cur[0].x * W() + 40, h.cur[0].y * H() + 40, "#ff4fd8");
+      // light up each fingertip that's counted as "up"
+      [4, 8, 12, 16, 20].forEach((tip, k) => { if (!h.up?.[k]) return; ctx.fillStyle = "#ffd166"; ctx.beginPath(); ctx.arc(h.cur[tip].x * W(), h.cur[tip].y * H(), 6, 0, 7); ctx.fill(); });
     }
   }
   if (active.has("pose") && R.pose) {
