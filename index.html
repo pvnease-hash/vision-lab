@@ -7,59 +7,107 @@
 <meta name="apple-mobile-web-app-title" content="Vision Lab">
 <meta name="theme-color" content="#0b0f14">
 <title>Vision Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#0b0f14; --panel:#141b24; --text:#e6edf3; --muted:#8b98a5; --accent:#2fd4ff; --on:#1f6feb; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
-  header { padding:12px 16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
-  h1 { font-size:18px; margin:0; letter-spacing:.5px; }
-  h1 span { color:var(--accent); }
-  #status { color:var(--muted); font-size:13px; }
-  main { display:flex; gap:16px; padding:0 16px 16px; flex-wrap:wrap; }
-  #stage { position:relative; flex:1 1 640px; max-width:960px; }
-  canvas { width:100%; border-radius:10px; background:#000; display:block; }
-  aside { flex:0 1 300px; display:flex; flex-direction:column; gap:12px; }
-  .card { background:var(--panel); border-radius:10px; padding:12px; }
-  .card h2 { font-size:12px; text-transform:uppercase; color:var(--muted); margin:0 0 8px; letter-spacing:1px; }
+  :root { --bg:#000; --bg2:#0b0b0f; --panel:rgba(28,28,32,.72); --panel2:rgba(44,44,50,.7); --line:rgba(255,255,255,.09); --text:#f5f5f7; --muted:#8e8e93;
+          --accent:#0a84ff; --accent2:#64d2ff; --on:#0a84ff; --good:#30d158; --warn:#ff9f0a; --bad:#ff453a; --radius:18px;
+          --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue",Inter,sans-serif; --head:var(--font); }
+  [data-theme="soviet"] { --bg:#0d0303; --bg2:#1a0505; --panel:rgba(48,8,8,.78); --panel2:rgba(80,14,14,.75); --line:rgba(255,204,51,.18); --text:#fff3d6; --muted:#c9a46a;
+          --accent:#d81e1e; --accent2:#ffcc33; --on:#c41414; --good:#ffcc33; --radius:4px; --head:"Oswald","Arial Narrow","Impact",sans-serif; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html { background:var(--bg); }
+  body { margin:0; min-height:100vh; color:var(--text); font:14px/1.45 var(--font); -webkit-font-smoothing:antialiased; letter-spacing:-.01em;
+         background: radial-gradient(1200px 600px at 10% -10%, rgba(10,132,255,.16), transparent 60%), radial-gradient(900px 500px at 110% 10%, rgba(191,90,242,.12), transparent 60%), var(--bg); }
+  [data-theme="soviet"] body { background: repeating-linear-gradient(135deg, rgba(216,30,30,.05) 0 40px, transparent 40px 80px), radial-gradient(900px 500px at 0% 0%, rgba(216,30,30,.22), transparent 60%), var(--bg); }
+  header { position:sticky; top:0; z-index:40; padding:12px 18px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+           background:rgba(0,0,0,.55); backdrop-filter:saturate(180%) blur(20px); -webkit-backdrop-filter:saturate(180%) blur(20px); border-bottom:1px solid var(--line); }
+  [data-theme="soviet"] header { background:rgba(60,4,4,.8); border-bottom:3px solid var(--accent2); }
+  h1 { font:700 19px/1 var(--head); margin:0; letter-spacing:-.02em; }
+  h1 span { background:linear-gradient(90deg,var(--accent),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  [data-theme="soviet"] h1 { text-transform:uppercase; letter-spacing:.12em; font-size:22px; }
+  [data-theme="soviet"] h1::before { content:"★ "; color:var(--accent2); }
+  #status { color:var(--muted); font-size:13px; flex:1; min-width:160px; }
+  .seg { display:inline-flex; background:var(--panel2); border-radius:10px; padding:2px; border:1px solid var(--line); }
+  .seg button { background:transparent; border:0; padding:5px 12px; border-radius:8px; font-size:12px; color:var(--muted); min-height:0; text-align:center; }
+  .seg button.on { background:var(--text); color:var(--bg); }
+  main { display:flex; gap:18px; padding:18px; flex-wrap:wrap; align-items:flex-start; }
+  #stage { position:relative; flex:1 1 640px; max-width:1000px; }
+  #out { width:100%; border-radius:var(--radius); background:#000; display:block; box-shadow:0 20px 60px rgba(0,0,0,.55), 0 0 0 1px var(--line); }
+  [data-theme="soviet"] #out { box-shadow:0 0 0 3px var(--accent), 0 0 0 6px var(--accent2), 0 20px 60px rgba(0,0,0,.6); }
+  aside { flex:0 1 340px; display:flex; flex-direction:column; gap:14px; min-width:280px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:14px; backdrop-filter:blur(24px) saturate(160%); -webkit-backdrop-filter:blur(24px) saturate(160%); }
+  [data-theme="soviet"] .card { border-left:4px solid var(--accent); }
+  .card h2 { font:600 12px/1 var(--head); text-transform:uppercase; color:var(--muted); margin:0 0 10px; letter-spacing:.08em; display:flex; align-items:center; gap:8px; }
+  [data-theme="soviet"] .card h2 { color:var(--accent2); font-size:14px; letter-spacing:.14em; }
   .grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
-  button { background:#222c38; color:var(--text); border:1px solid #2c3846; border-radius:8px; padding:8px; font:inherit; cursor:pointer; text-align:left; }
-  button.on { background:var(--on); border-color:var(--on); }
-  button kbd { float:right; color:var(--muted); font-size:11px; }
-  button.on kbd { color:#cfe3ff; }
-  input { width:100%; background:#0b0f14; color:var(--text); border:1px solid #2c3846; border-radius:8px; padding:8px; font:inherit; }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--line); border-radius:12px; padding:9px 10px; font:500 13px/1.2 var(--font); cursor:pointer; text-align:left; transition:background .15s, transform .1s, box-shadow .15s; }
+  button:hover { background:rgba(255,255,255,.12); }
+  button:active { transform:scale(.97); }
+  button.on { background:var(--on); border-color:transparent; color:#fff; box-shadow:0 4px 14px rgba(10,132,255,.35); }
+  [data-theme="soviet"] button { border-radius:2px; text-transform:uppercase; font-family:var(--head); letter-spacing:.04em; }
+  [data-theme="soviet"] button.on { box-shadow:0 0 0 1px var(--accent2) inset; }
+  button kbd { float:right; color:var(--muted); font:11px var(--font); opacity:.8; }
+  button.on kbd { color:rgba(255,255,255,.75); }
+  input, select { width:100%; background:rgba(0,0,0,.35); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:9px 11px; font:inherit; outline:none; }
+  input:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(10,132,255,.25); }
+  input[type=range] { padding:0; accent-color:var(--accent); }
   #answer { white-space:pre-wrap; min-height:40px; color:#cfe8d0; }
   #big { display:none; position:absolute; inset:0; align-items:center; justify-content:center; text-align:center; padding:24px; }
-  #big button { text-align:center; font-size:18px; padding:14px 24px; background:var(--on); }
+  #big button { text-align:center; font-size:17px; padding:14px 28px; background:var(--accent); border-radius:999px; color:#fff; box-shadow:0 10px 30px rgba(10,132,255,.45); }
   small { color:var(--muted); }
-  select { width:100%; background:#0b0f14; color:var(--text); border:1px solid #2c3846; border-radius:8px; padding:8px; font:inherit; }
-  #talk { text-align:center; font-size:16px; padding:12px; background:#1d3b2a; border-color:#2e6b47; }
-  #dictate.listening { background:#b3261e; border-color:#b3261e; }
-  #talk.listening { background:#7a2420; border-color:#b3261e; }
-  #live { width:100%; text-align:center; font-size:16px; padding:12px; margin-bottom:6px; background:#1f3a5f; border-color:#2f6fb0; }
-  #live.on { background:#0e5a7a; border-color:#2fd4ff; box-shadow:0 0 0 2px rgba(47,212,255,.25) inset; }
-  #talk.armed { background:#16302a; border-color:#2e6b47; }
-  @keyframes pulse { from { opacity:1 } to { opacity:.6 } }
-  #chat { max-height:180px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin:8px 0; }
-  #chat .me { align-self:flex-end; background:#1f3a5f; padding:6px 10px; border-radius:10px 10px 2px 10px; max-width:90%; }
-  #chat .ai { align-self:flex-start; background:#1d2a22; color:#cfe8d0; padding:6px 10px; border-radius:10px 10px 10px 2px; max-width:90%; }
+  #talk { text-align:center; font-size:15px; padding:12px; background:rgba(48,209,88,.18); border-color:rgba(48,209,88,.35); width:100%; }
+  #dictate.listening { background:var(--bad); border-color:var(--bad); }
+  #talk.listening { background:rgba(255,69,58,.35); border-color:var(--bad); }
+  #live { width:100%; text-align:center; font-size:15px; padding:12px; margin-bottom:8px; background:linear-gradient(135deg,#0a84ff,#5e5ce6); border:0; color:#fff; }
+  #live.on { background:linear-gradient(135deg,#30d158,#0a84ff); box-shadow:0 0 0 2px rgba(100,210,255,.4); }
+  #talk.armed { background:rgba(48,209,88,.12); }
+  #chat { max-height:200px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin:10px 0; }
+  #chat .me { align-self:flex-end; background:var(--accent); color:#fff; padding:7px 12px; border-radius:18px 18px 4px 18px; max-width:88%; }
+  #chat .ai { align-self:flex-start; background:var(--panel2); padding:7px 12px; border-radius:18px 18px 18px 4px; max-width:88%; }
   details summary { cursor:pointer; color:var(--muted); margin-top:8px; }
   details > * { margin-top:6px; }
   label.row { display:flex; gap:8px; align-items:center; margin-top:6px; }
   label.row input { width:auto; }
-  @media (prefers-reduced-motion: reduce) { #talk.listening { animation:none; } }
-  #orb { position:fixed; right:16px; bottom:16px; z-index:50; width:140px; display:flex; flex-direction:column; align-items:center; gap:6px; touch-action:none; user-select:none; -webkit-user-select:none; cursor:grab; }
+  /* modes */
+  #modeTools { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
+  .chips { display:flex; gap:6px; overflow-x:auto; scrollbar-width:none; padding-bottom:2px; }
+  .chips::-webkit-scrollbar { display:none; }
+  .chip { flex:0 0 auto; padding:5px 11px; border-radius:999px; font-size:12px; min-height:0; text-align:center; }
+  #modes button { position:relative; padding-right:26px; }
+  #modes .star { position:absolute; right:6px; top:50%; transform:translateY(-50%); font-size:13px; opacity:.35; padding:2px; }
+  #modes .star.fav { opacity:1; color:#ffd60a; }
+  #modes .ghostDrag { opacity:.35; }
+  #modes .chosen { box-shadow:0 0 0 2px var(--accent2); }
+  /* mode option cards */
+  #subs { display:flex; flex-direction:column; gap:10px; }
+  .sub { background:rgba(0,0,0,.25); border:1px solid var(--line); border-radius:14px; padding:10px; }
+  .sub h3 { margin:0 0 8px; font:600 13px/1.2 var(--head); display:flex; justify-content:space-between; align-items:center; }
+  .sub .opts { display:flex; flex-wrap:wrap; gap:6px; }
+  .sub .opts button { padding:6px 10px; font-size:12px; border-radius:999px; min-height:0; }
+  .sub .list { max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:4px; margin-top:6px; }
+  .sub .item { display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:10px; background:var(--panel2); cursor:pointer; }
+  .sub .item.sel { background:var(--on); color:#fff; }
+  .sub .item .st { cursor:pointer; opacity:.4; } .sub .item .st.fav { opacity:1; color:#ffd60a; }
+  .sub .item small { margin-left:auto; }
+  .big-num { font:700 34px/1 var(--head); letter-spacing:-.02em; }
+  @media (prefers-reduced-motion: reduce) { #talk.listening { animation:none; } button { transition:none; } }
+  #orb { --orb:140px; position:fixed; right:16px; bottom:16px; z-index:50; width:var(--orb); display:flex; flex-direction:column; align-items:center; gap:6px; touch-action:none; user-select:none; -webkit-user-select:none; cursor:grab; }
   #orb.dragging { cursor:grabbing; }
-  #orb canvas { width:140px; height:140px; background:transparent; border-radius:50%; }
-  #orbcap { max-width:240px; font-size:12px; line-height:1.35; text-align:center; color:#cfefff; background:rgba(11,15,20,.82); border:1px solid #1f3a4a; border-radius:10px; padding:6px 10px; display:none; }
-  #orbstate { font:600 10px/1 -apple-system,sans-serif; letter-spacing:2px; color:#2fd4ff; text-transform:uppercase; }
-  @media (pointer:coarse) { button { min-height:44px; } button kbd { display:none; } input { font-size:16px; } }
-  @media (max-width:700px) { header { padding:10px 12px; } main { padding:0 12px 16px; } aside { flex:1 1 100%; } #stage { flex:1 1 100%; } }
+  #orb canvas { width:var(--orb); height:var(--orb); background:transparent; border-radius:50%; }
+  #orbgrip { position:absolute; right:-6px; top:calc(var(--orb) - 22px); width:26px; height:26px; border-radius:50%; background:rgba(28,28,32,.85); border:1px solid var(--line); color:var(--muted); font-size:13px; display:flex; align-items:center; justify-content:center; cursor:nwse-resize; touch-action:none; opacity:.55; }
+  #orb:hover #orbgrip, #orbgrip:active { opacity:1; }
+  #orbcap { max-width:calc(var(--orb) + 120px); font-size:12px; line-height:1.35; text-align:center; color:var(--text); background:rgba(28,28,32,.85); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); border:1px solid var(--line); border-radius:14px; padding:7px 11px; display:none; }
+  #orbstate { font:600 10px/1 var(--font); letter-spacing:2px; color:var(--accent2); text-transform:uppercase; }
+  @media (pointer:coarse) { button { min-height:42px; } button kbd { display:none; } input { font-size:16px; } }
+  @media (max-width:700px) { header { padding:10px 12px; } main { padding:12px; } aside { flex:1 1 100%; min-width:0; } #stage { flex:1 1 100%; } }
 </style>
 </head>
 <body>
 <header>
   <h1>VISION <span>LAB</span></h1>
   <div id="status">Click “Start camera”.</div>
+  <div class="seg" id="themeSeg"><button data-t="apple">Apple</button><button data-t="soviet">★ Soviet</button></div>
+  <div class="seg" id="unitSeg"><button data-u="us">ft · in</button><button data-u="metric">m · cm</button></div>
 </header>
 <main>
   <div id="stage">
@@ -68,8 +116,17 @@
   </div>
   <aside>
     <div class="card">
-      <h2>Vision modes (mix &amp; match)</h2>
+      <h2>Vision modes <small id="modeCount"></small></h2>
+      <div id="modeTools">
+        <input id="modeSearch" placeholder="Search modes…" autocomplete="off">
+        <div class="chips" id="modeCats"></div>
+      </div>
       <div class="grid" id="modes"></div>
+      <small>☆ = favourite · drag a mode to reorder (hold, then drag on iPhone)</small>
+    </div>
+    <div class="card" id="subsCard">
+      <h2>Mode options</h2>
+      <div id="subs"></div>
     </div>
     <div class="card">
       <h2>Faces</h2>
@@ -143,6 +200,7 @@
   <canvas id="orbc" width="200" height="200"></canvas>
   <div id="orbstate">JARVIS</div>
   <div id="orbcap"></div>
+  <div id="orbgrip" title="Drag to resize">⤡</div>
 </div>
 
 <script type="module">
@@ -167,12 +225,21 @@ const MODES = [
   ["objects", "Objects", "1"], ["faces", "Faces", "2"], ["hands", "Hands", "3"],
   ["pose", "Body pose", "4"], ["mesh", "Face mesh", "5"], ["expr", "Expressions", "6"], ["motion", "Motion", "M"],
   ["seg", "Background blur", "7"], ["scene", "Scene", "8"], ["text", "Read text β", "9"], ["qr", "QR & barcodes", "0"],
-  ["gaze", "Gaze & drowsy", "G"], ["draw", "Air draw", "D"], ["workout", "Workout reps", "W"], ["depth", "Depth β", "P"],
+  ["gaze", "Gaze & drowsy", "G"], ["draw", "Air draw", "D"], ["workout", "Workout reps", "W"], ["depth", "Depth & measure β", "P"],
   ["fingers", "Finger count", "N"], ["posture", "Posture check", "O"], ["distance", "Distance", "L"], ["color", "Color ID", "C"],
-  ["blur", "Face blur", "B"], ["people", "People counter", "U"], ["intruder", "Intruder alert", "I"], ["hud", "Iron Man HUD", "H"],
+  ["blur", "Face blur", "B"], ["people", "Object counter", "U"], ["intruder", "Intruder alert", "I"], ["hud", "Iron Man HUD", "H"],
   ["pulse", "Heart rate β", "K"], ["ar", "AR menus & keypad", "A"], ["thoughts", "Thoughts & predictions", "J"], ["ghost", "Ghost hunter 👻", "X"],
+  ["clavmax", "Clav-max 📐", "Q"], ["asl", "ASL letters β", "E"], ["rps", "Rock paper scissors", "Y"], ["facetouch", "Face-touch alert", "Z"],
+  ["blink", "Blink counter", ""], ["smile", "Smile shutter 📸", ""], ["laser", "Laser eyes", ""], ["masks", "Face masks 🕶", ""],
+  ["trails", "Motion trails", ""], ["holo", "3D hologram ✋", ""],
   ["filter", "Filter: off", "F"],
 ];
+const MODE_CAT = { objects: "Objects", qr: "Objects", text: "Objects", scene: "Objects", color: "Objects", people: "Objects", depth: "Tools",
+  faces: "Face", mesh: "Face", expr: "Face", gaze: "Face", blur: "Face", distance: "Tools", clavmax: "Face", blink: "Face", smile: "Face", pulse: "Health",
+  hands: "Hands", fingers: "Hands", draw: "Hands", ar: "Hands", asl: "Hands", rps: "Fun", facetouch: "Health",
+  pose: "Body", workout: "Health", posture: "Health", motion: "Safety", intruder: "Safety", seg: "Effects", hud: "Effects", filter: "Effects",
+  thoughts: "AI", ghost: "Fun", laser: "Fun", masks: "Fun", trails: "Effects", holo: "Hands" };
+const CATS = ["All", "★ Favs", "On", "Face", "Hands", "Body", "Objects", "Health", "Tools", "AI", "Effects", "Fun", "Safety"];
 const $ = id => document.getElementById(id);
 const out = $("out"), ctx = out.getContext("2d");
 const video = document.createElement("video");
@@ -188,20 +255,123 @@ let draw, facing = "user", mirror = true, started = false;
 
 // ---------- UI ----------
 function setStatus(t) { $("status").textContent = t; }
+// ---------- options for every mode (saved in this browser) ----------
+const OPT_DEFAULTS = { units: "us", theme: "apple", favModes: ["objects", "hands", "draw", "workout"], modeOrder: [], modeCat: "All",
+  objCats: {}, objMin: 0.4, handSkel: true, handLabels: true, handTips: true,
+  ex: "squat", exFavs: ["squat", "pushup", "curl", "jacks"], repVoice: true, distCal: 1, depthObjLabels: true,
+  counterClass: "person", ghostSens: 1, thoughtsAI: true, mask: "shades", clavFace: true, clavBody: true,
+  brush: "neon", mirrorDraw: false, holoModel: "rocket", holoSolid: true, holoColor: "#64d2ff", intruderSound: true, trailLen: 0.75, laserColor: "#ff2d2d" };
+const opt = Object.assign({}, OPT_DEFAULTS, store.get("opts", {}));
+function saveOpt() { store.set("opts", opt); }
+const el = (tag, props = {}, kids = []) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(props)) { if (k === "style") e.style.cssText = v; else if (k.startsWith("on")) e[k] = v; else if (k === "html") e.innerHTML = v; else e.setAttribute(k, v); } for (const c of [].concat(kids)) if (c != null) e.append(c); return e; };
+// units: US by default, metric only if you pick it
+function fmtLen(m, short) {
+  if (!isFinite(m) || m <= 0) return "—";
+  if (opt.units === "metric") return m < 1 ? `${Math.round(m * 100)} cm` : `${m.toFixed(2)} m`;
+  const inches = m / 0.0254; if (inches < 12) return `${inches < 3 ? inches.toFixed(1) : Math.round(inches)} in`;
+  const ft = Math.floor(inches / 12), inch = Math.round(inches - ft * 12);
+  return inch === 12 ? `${ft + 1} ft` : inch === 0 ? `${ft} ft` : short ? `${ft}′${inch}″` : `${ft} ft ${inch} in`;
+}
+function applyTheme() { document.documentElement.dataset.theme = opt.theme;
+  for (const b of document.querySelectorAll("#themeSeg button")) b.className = b.dataset.t === opt.theme ? "on" : "";
+  for (const b of document.querySelectorAll("#unitSeg button")) b.className = b.dataset.u === opt.units ? "on" : ""; }
+for (const b of document.querySelectorAll("#themeSeg button")) b.onclick = () => { opt.theme = b.dataset.t; saveOpt(); applyTheme(); };
+for (const b of document.querySelectorAll("#unitSeg button")) b.onclick = () => { opt.units = b.dataset.u; saveOpt(); applyTheme(); renderSubs(); };
+applyTheme();
+function orderedModes() {
+  const order = opt.modeOrder.filter(k => MODES.some(m => m[0] === k));
+  for (const m of MODES) if (!order.includes(m[0])) order.push(m[0]);
+  return order.map(k => MODES.find(m => m[0] === k));
+}
 function renderModes() {
-  $("modes").innerHTML = "";
-  for (const [key, name, k] of MODES) {
-    const b = document.createElement("button");
-    b.innerHTML = `${key === "filter" ? "Filter: " + FILTERS[filterIdx].name : name} <kbd>${k}</kbd>`;
-    b.className = (key === "filter" ? filterIdx > 0 : active.has(key)) ? "on" : "";
-    b.onclick = () => toggle(key);
-    $("modes").appendChild(b);
+  const q = ($("modeSearch")?.value || "").trim().toLowerCase(), cat = opt.modeCat;
+  $("modeCats").innerHTML = "";
+  for (const c of CATS) $("modeCats").append(el("button", { class: "chip" + (c === cat ? " on" : ""), onclick: () => { opt.modeCat = c; saveOpt(); renderModes(); } }, c));
+  $("modes").innerHTML = ""; let shown = 0;
+  for (const [key, name, k] of orderedModes()) {
+    const isOn = key === "filter" ? filterIdx > 0 : active.has(key), fav = opt.favModes.includes(key);
+    const label = key === "filter" ? "Filter: " + FILTERS[filterIdx].name : name;
+    if (q && !(label.toLowerCase().includes(q) || (MODE_CAT[key] || "").toLowerCase().includes(q))) continue;
+    if (!q && cat === "★ Favs" && !fav) continue;
+    if (!q && cat === "On" && !isOn) continue;
+    if (!q && !["All", "★ Favs", "On"].includes(cat) && MODE_CAT[key] !== cat) continue;
+    const star = el("span", { class: "star" + (fav ? " fav" : ""), title: "Favourite", onclick: e => { e.stopPropagation();
+      opt.favModes = fav ? opt.favModes.filter(x => x !== key) : [...opt.favModes, key]; saveOpt(); renderModes(); } }, fav ? "★" : "☆");
+    const b = el("button", { class: isOn ? "on" : "", "data-key": key, onclick: () => toggle(key) }, [label + " ", k ? el("kbd", {}, k) : null, star]);
+    $("modes").append(b); shown++;
   }
+  $("modeCount").textContent = `${active.size} on · ${MODES.length} total`;
+  if (!shown) $("modes").append(el("small", {}, "No modes match."));
+  renderSubs(); setupSortable();
+}
+$("modeSearch").oninput = () => renderModes();
+let sortable = null;
+async function setupSortable() {
+  if (sortable) return;
+  try {
+    const { default: Sortable } = await import("https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/modular/sortable.esm.js");
+    sortable = Sortable.create($("modes"), { animation: 160, delay: 220, delayOnTouchOnly: true, ghostClass: "ghostDrag", chosenClass: "chosen", filter: ".star", preventOnFilter: false,
+      onEnd: () => { const vis = [...$("modes").querySelectorAll("button[data-key]")].map(b => b.dataset.key);
+        const order = orderedModes().map(m => m[0]); const slots = order.map((k, i) => vis.includes(k) ? i : -1).filter(i => i >= 0);
+        slots.forEach((slot, j) => order[slot] = vis[j]); opt.modeOrder = order; saveOpt(); } });
+  } catch (e) { log("drag-reorder unavailable: " + e.message); }
 }
 function toggle(key) {
   if (key === "filter") { filterIdx = (filterIdx + 1) % FILTERS.length; store.set("filter", filterIdx); renderModes(); return; }
   active.has(key) ? active.delete(key) : active.add(key);
   store.set("modes", [...active]); renderModes(); ensure(key);
+}
+// ---------- per-mode option cards ----------
+const chipT = (label, on, fn) => el("button", { class: on ? "on" : "", onclick: () => { fn(); saveOpt(); renderSubs(); } }, label);
+const leftX = () => active.has("draw") ? Math.round(80 * Math.min(H() / 360, W() / 420)) : 8;
+const OBJ_GROUPS = { People: ["person"], Animals: ["bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"],
+  Vehicles: ["bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat"], Street: ["traffic light", "fire hydrant", "stop sign", "parking meter", "bench"],
+  Bags: ["backpack", "umbrella", "handbag", "tie", "suitcase"], Sports: ["frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket"],
+  Kitchen: ["bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl"], Food: ["banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake"],
+  Furniture: ["chair", "couch", "potted plant", "bed", "dining table", "toilet"], Electronics: ["tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator"],
+  Household: ["book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"] };
+const OBJ_GROUP_OF = {}; for (const [g, list] of Object.entries(OBJ_GROUPS)) for (const n of list) OBJ_GROUP_OF[n] = g;
+const objAllowed = (name, score) => opt.objCats[OBJ_GROUP_OF[name] || "Household"] !== false && score >= opt.objMin;
+const SUBS = {
+  filter: () => [el("select", { onchange: e => { filterIdx = +e.target.value; store.set("filter", filterIdx); renderModes(); } },
+    FILTERS.map((f, i) => { const o = el("option", { value: i }, f.name === "off" ? "No filter" : f.name); if (i === filterIdx) o.selected = true; return o; }))],
+  objects: () => [el("div", { class: "opts" }, Object.keys(OBJ_GROUPS).map(g => chipT(g, opt.objCats[g] !== false, () => opt.objCats[g] = opt.objCats[g] === false))),
+    el("label", { class: "row" }, [el("small", {}, "Min confidence"), el("input", { type: "range", min: 20, max: 90, value: Math.round(opt.objMin * 100), oninput: e => { opt.objMin = e.target.value / 100; saveOpt(); e.target.nextSibling.textContent = e.target.value + "%"; } }), el("small", {}, Math.round(opt.objMin * 100) + "%")])],
+  hands: () => [el("div", { class: "opts" }, [chipT("Skeleton", opt.handSkel, () => opt.handSkel = !opt.handSkel), chipT("Gesture labels", opt.handLabels, () => opt.handLabels = !opt.handLabels), chipT("Fingertips", opt.handTips, () => opt.handTips = !opt.handTips)])],
+  workout: () => workoutCard(),
+  distance: () => [el("small", {}, "Uses your iris size (11.7 mm on almost everyone) for accuracy."),
+    el("div", { class: "opts", style: "margin-top:6px" }, [el("button", { onclick: () => calibrateDistance(opt.units === "metric" ? 0.6 : 0.6096) }, opt.units === "metric" ? "I'm 60 cm away → calibrate" : "I'm 2 ft away → calibrate"),
+      chipT("Reset calibration", false, () => opt.distCal = 1)])],
+  depth: () => [el("small", {}, "Tap/click two spots on the video to measure between them. Distances are calibrated from your face when it's in view."),
+    el("div", { class: "opts", style: "margin-top:6px" }, [chipT("Label objects", opt.depthObjLabels, () => opt.depthObjLabels = !opt.depthObjLabels), chipT("Clear measurements", false, () => DM.pts = [])])],
+  people: () => [el("select", { onchange: e => { opt.counterClass = e.target.value; saveOpt(); } },
+    ["anything", ...Object.values(OBJ_GROUPS).flat()].map(n => { const o = el("option", { value: n }, n === "anything" ? "Count anything" : n); if (n === opt.counterClass) o.selected = true; return o; }))],
+  ghost: () => [el("label", { class: "row" }, [el("small", {}, "Sensitivity"), el("input", { type: "range", min: 30, max: 300, value: Math.round(opt.ghostSens * 100), oninput: e => { opt.ghostSens = e.target.value / 100; saveOpt(); } })]),
+    el("div", { class: "opts", style: "margin-top:6px" }, [chipT("↺ Recalibrate (keep still 3 s)", false, () => ghostRecalibrate()), chipT("Clear log", false, () => { GH.log = []; GH.events = 0; })]),
+    el("small", {}, "Tip: put the camera on something steady. People, pets, hands and faces are ignored.")],
+  thoughts: () => [el("div", { class: "opts" }, [chipT("AI inner monologue (Gemini key)", opt.thoughtsAI, () => opt.thoughtsAI = !opt.thoughtsAI)])],
+  masks: () => [el("div", { class: "opts" }, MASKS.map(([k, n]) => chipT(n, opt.mask === k, () => opt.mask = k)))],
+  clavmax: () => [el("div", { class: "opts" }, [chipT("Face geometry", opt.clavFace, () => opt.clavFace = !opt.clavFace), chipT("Shoulders / frame", opt.clavBody, () => { opt.clavBody = !opt.clavBody; if (opt.clavBody) ensure("pose"); })]),
+    el("small", {}, "Measurements only, not a rating. Face the camera straight on in even light.")],
+  draw: () => [el("div", { class: "opts" }, [...BRUSHES.map(([k, n]) => chipT(n, opt.brush === k, () => opt.brush = k)), chipT("🪞 Mirror", opt.mirrorDraw, () => opt.mirrorDraw = !opt.mirrorDraw)])],
+  holo: () => [el("div", { class: "opts" }, [["rocket", "🚀 Rocket"], ["engine", "🔥 Rocket engine"], ["planet", "🪐 Planet"], ["torus", "🍩 Torus"], ["cube", "🧊 Cube"]].map(([k, n]) => chipT(n, opt.holoModel === k, () => opt.holoModel = k))),
+    el("div", { class: "opts", style: "margin-top:6px" }, [chipT(opt.holoSolid ? "Solid ✓" : "Solid", opt.holoSolid, () => opt.holoSolid = true), chipT("Hologram wireframe", !opt.holoSolid, () => opt.holoSolid = false),
+      chipT("↺ Reset view", false, () => Object.assign(HO, { rx: -0.35, ry: 0.6, rz: 0, x: 0.62, y: 0.5, s: 0.32, vx: 0, vy: 0 }))]),
+    el("small", {}, "🤏 pinch near it + move = rotate · ✊ fist = grab & move (push/pull to resize) · two hands pinching = scale + twist · ✋ swipe = spin. Mouse: drag, shift-drag, scroll.")],
+  intruder: () => [el("div", { class: "opts" }, [chipT("Alarm sound", opt.intruderSound, () => opt.intruderSound = !opt.intruderSound)])],
+  trails: () => [el("label", { class: "row" }, [el("small", {}, "Trail length"), el("input", { type: "range", min: 30, max: 95, value: Math.round(opt.trailLen * 100), oninput: e => { opt.trailLen = e.target.value / 100; saveOpt(); } })])],
+  laser: () => [el("div", { class: "opts" }, [["#ff2d2d", "Red"], ["#2fd4ff", "Blue"], ["#30d158", "Green"], ["#bf5af2", "Purple"]].map(([c, n]) => chipT(n, opt.laserColor === c, () => opt.laserColor = c)))],
+  asl: () => [el("div", { class: "big-num", id: "aslWord" }, ASL.word || "…"), el("div", { class: "opts" }, [chipT("Clear", false, () => ASL.word = ""), chipT("Speak it", false, () => ASL.word && say(ASL.word))])],
+  rps: () => [el("div", { class: "big-num" }, `You ${RPS.me} – ${RPS.ai} JARVIS`), el("div", { class: "opts" }, [chipT("Reset score", false, () => { RPS.me = RPS.ai = 0; })])],
+  blink: () => [el("div", { class: "opts" }, [chipT("Reset", false, () => { BL.n = 0; BL.t0 = performance.now(); })])],
+  facetouch: () => [el("div", { class: "opts" }, [chipT("Reset count", false, () => FT.n = 0)])],
+};
+const MODE_NAME = Object.fromEntries(MODES.map(m => [m[0], m[1]]));
+function renderSubs() {
+  const box = $("subs"); if (!box) return; box.innerHTML = "";
+  const keys = ["filter", ...orderedModes().map(m => m[0]).filter(k => k !== "filter" && active.has(k) && SUBS[k])];
+  for (const k of keys) { let kids; try { kids = SUBS[k](); } catch (e) { continue; }
+    box.append(el("div", { class: "sub" }, [el("h3", {}, [k === "filter" ? "🎨 Camera filter" : MODE_NAME[k]]), ...kids])); }
 }
 function renderKnown() {
   const names = Object.keys(known);
@@ -334,10 +504,11 @@ async function make(cls, path, extra = {}, mode = "VIDEO") {
     catch (e) { if (delegate === "CPU") throw e; }
   }
 }
-const NEEDS = { fingers: "hands", posture: "pose", distance: "faces", blur: "faces", intruder: "objects", people: "objects", pulse: "mesh", hud: "objects", ar: "hands", thoughts: "objects", ghost: "objects" };
+const NEEDS = { fingers: "hands", posture: "pose", distance: "mesh", blur: "faces", clavmax: ["mesh", "pose"], asl: "hands", rps: "hands", facetouch: ["hands", "mesh"], blink: "mesh", smile: "mesh", laser: "mesh", masks: "mesh", holo: "hands", intruder: "objects", people: "objects", pulse: "mesh", hud: "objects", ar: "hands", thoughts: "objects", ghost: "objects" };
 async function ensure(key) {
-  if (key === "color") return;
-  if (NEEDS[key]) { if (!vision) return; await ensure(NEEDS[key]); if (models[NEEDS[key]]) models[key] = true; return; }
+  if (key === "color" || key === "trails") return;
+  if (NEEDS[key]) { if (!vision) return; const need = [].concat(NEEDS[key]).filter(n => !(key === "clavmax" && n === "pose" && !opt.clavBody));
+    for (const n of need) await ensure(n); if (need.every(n => models[n])) models[key] = true; return; }
   if (key === "motion" || key === "filter" || models[key] || loading[key] || !vision) return;   // models load once the camera starts
   loading[key] = true; setStatus(`Loading ${key} model…`);
   try {
@@ -358,7 +529,7 @@ async function ensure(key) {
     if (key === "gaze") { if (!models.mesh) models.mesh = await make(FaceLandmarker, MODELS.mesh, { numFaces: 2, outputFaceBlendshapes: true }); models.gaze = models.mesh; }
     if (key === "text") await getOcr();
     if (key === "qr") await getQr();
-    if (key === "depth") await getDepth();
+    if (key === "depth") { await getDepth(); if (!models.mesh) models.mesh = await make(FaceLandmarker, MODELS.mesh, { numFaces: 2, outputFaceBlendshapes: true }); }
     if ((key === "mesh" || key === "expr") && !models.mesh) models.mesh = await make(FaceLandmarker, MODELS.mesh, { numFaces: 2, outputFaceBlendshapes: true });
     if (key === "expr") models.expr = models.mesh;
     if (key === "faces") {
@@ -624,7 +795,8 @@ async function getDepth() { if (depthPipe) return; setStatus("Loading depth mode
 function runDepth() { every("depth", 1500, async () => {
   const { RawImage } = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/+esm");
   const out = await depthPipe(RawImage.fromCanvas(grab(256)));
-  X.depth = out.depth.toCanvas(); }); }
+  X.depth = out.depth.toCanvas();
+  try { const t = out.predicted_depth, dm = t.dims; X.depthRaw = { data: t.data, w: dm[dm.length - 1], h: dm[dm.length - 2] }; } catch (e) { log("depth raw: " + e.message); } }); }
 // Gaze, head direction & drowsiness (uses the face mesh)
 let eyesClosedSince = 0, drowsyWarned = 0;
 function drawGaze(now) {
@@ -649,8 +821,15 @@ function drawGaze(now) {
 // Air draw 2.0: ☝️ point (index finger) OR 🤏 pinch thumb+index = pen down. ✋ hold open hand 1 s = erase all.
 // Left-edge toolbar: colours, brush size, undo, clear, save — hover your fingertip on one for half a second (or tap/click it).
 // Mouse / finger-on-screen drawing works too.
-let drawing = null, openSince = 0, penOn = false, penOffT = 0, penPt = null, inkIdx = 0, inkW = 7, tbHover = null, tbHoverT = 0, tbRects = [];
+let drawing = null, drawing2 = null, erasing = false, drawTool = "pen", openSince = 0, penOn = false, penOffT = 0, penPt = null, inkIdx = 0, inkW = 7, tbHover = null, tbHoverT = 0, tbRects = [];
 const INK = ["#2fd4ff", "#ff4fd8", "#ffd166", "#3ddc84", "#ff4d4d", "#ffffff", "rainbow"], sparks = [];
+const BRUSHES = [["neon", "✨ Neon"], ["marker", "🖊 Marker"], ["spray", "💨 Spray"], ["dotted", "⋯ Dotted"], ["callig", "✒️ Calligraphy"], ["highlight", "🖍 Highlighter"]];
+const undoStack = [], redoStack = [];
+const snapStrokes = () => X.strokes.map(s => ({ ...s, pts: s.pts.slice() }));
+function pushUndo() { undoStack.push(snapStrokes()); if (undoStack.length > 60) undoStack.shift(); redoStack.length = 0; }
+function undoDraw() { if (!undoStack.length) return; redoStack.push(snapStrokes()); X.strokes = undoStack.pop(); drawing = drawing2 = null; clickSound(900); }
+function redoDraw() { if (!redoStack.length) return; undoStack.push(snapStrokes()); X.strokes = redoStack.pop(); drawing = drawing2 = null; clickSound(1100); }
+function clearDraw() { if (!X.strokes.length) return; pushUndo(); X.strokes = []; drawing = drawing2 = null; }
 function penState(h) {
   const p = h.cur, up = fingersUp(p), size = Math.hypot(p[0].x - p[9].x, p[0].y - p[9].y) || 0.1;
   const pinch = Math.hypot(p[4].x - p[8].x, p[4].y - p[8].y) / size < 0.38;
@@ -659,38 +838,55 @@ function penState(h) {
   return { pen: (pinch || point) && !open, open, pinch, tip: pinch ? { x: (p[4].x + p[8].x) / 2, y: (p[4].y + p[8].y) / 2 } : p[8] };
 }
 const toScreen = p => ({ x: (mirror ? 1 - p.x : p.x) * W(), y: p.y * H() });
+function eraseAt(pt) {           // cut away any ink near the eraser, splitting strokes where needed
+  const r = 0.028, keep = [];
+  for (const s of X.strokes) { let seg = [];
+    for (const q of s.pts) { if (Math.hypot((q.x - pt.x) * W() / H(), q.y - pt.y) < r) { if (seg.length > 1) keep.push({ ...s, pts: seg }); seg = []; } else seg.push(q); }
+    if (seg.length > 1) keep.push({ ...s, pts: seg }); }
+  X.strokes = keep;
+}
 function addInk(pt) {           // pt in normalised, un-mirrored video coords
-  if (!drawing) { drawing = { c: INK[inkIdx], w: inkW, pts: [] }; X.strokes.push(drawing); }
+  if (drawTool === "eraser") { if (!erasing) { pushUndo(); erasing = true; } eraseAt(pt); return; }
+  if (!drawing) { pushUndo(); drawing = { c: INK[inkIdx], w: inkW, b: opt.brush, pts: [] }; X.strokes.push(drawing);
+    if (opt.mirrorDraw) { drawing2 = { ...drawing, pts: [] }; X.strokes.push(drawing2); } else drawing2 = null; }
   const last = drawing.pts[drawing.pts.length - 1];
-  if (!last || Math.hypot(last.x - pt.x, last.y - pt.y) > 0.0025) drawing.pts.push({ x: pt.x, y: pt.y });
+  if (!last || Math.hypot(last.x - pt.x, last.y - pt.y) > 0.0025) { drawing.pts.push({ x: pt.x, y: pt.y }); if (drawing2) drawing2.pts.push({ x: 1 - pt.x, y: pt.y }); }
   if (sparks.length < 80) for (let i = 0; i < 2; i++) sparks.push({ x: pt.x * W(), y: pt.y * H(), vx: (Math.random() - 0.5) * 3, vy: (Math.random() - 0.5) * 3, life: 1 });
 }
+function endInk() { drawing = drawing2 = null; erasing = false; }
 function toolbarAct(id) {
   clickSound(1700);
-  if (id.startsWith("ink")) inkIdx = +id.slice(3);
-  else if (id === "size") inkW = inkW === 4 ? 7 : inkW === 7 ? 12 : 4;
-  else if (id === "undo") X.strokes.pop();
-  else if (id === "clear") X.strokes = [];
+  if (id.startsWith("ink")) { inkIdx = +id.slice(3); drawTool = "pen"; }
+  else if (id === "brush") { const i = BRUSHES.findIndex(b => b[0] === opt.brush); opt.brush = BRUSHES[(i + 1) % BRUSHES.length][0]; drawTool = "pen"; saveOpt(); renderSubs(); }
+  else if (id === "size") inkW = inkW === 4 ? 7 : inkW === 7 ? 12 : inkW === 12 ? 20 : 4;
+  else if (id === "eraser") drawTool = drawTool === "eraser" ? "pen" : "eraser";
+  else if (id === "undo") undoDraw();
+  else if (id === "redo") redoDraw();
+  else if (id === "mirror") { opt.mirrorDraw = !opt.mirrorDraw; saveOpt(); renderSubs(); }
+  else if (id === "clear") clearDraw();
   else if (id === "save") $("snap").click();
-  drawing = null;
+  endInk();
 }
 function drawToolbar(now, cursor) {
-  const u = Math.min(H() / 360, W() / 420), s = 30 * u, g = 6 * u, x = 8 * u; let y = 34 * u; tbRects = [];
-  const items = [...INK.map((c, i) => ({ id: "ink" + i, c })), { id: "size", t: inkW === 4 ? "S" : inkW === 7 ? "M" : "L" }, { id: "undo", t: "↶" }, { id: "clear", t: "🗑" }, { id: "save", t: "💾" }];
+  const u = Math.min(H() / 360, W() / 420), s = 28 * u, g = 5 * u, x0 = 8 * u, y0 = 34 * u; tbRects = [];
+  const bIcon = (BRUSHES.find(b => b[0] === opt.brush) || BRUSHES[0])[1].split(" ")[0];
+  const items = [...INK.map((c, i) => ({ id: "ink" + i, c, sel: drawTool === "pen" && i === inkIdx })), { id: "brush", t: bIcon }, { id: "size", t: { 4: "S", 7: "M", 12: "L", 20: "XL" }[inkW] },
+    { id: "eraser", t: "🧽", sel: drawTool === "eraser" }, { id: "undo", t: "↶", dim: !undoStack.length }, { id: "redo", t: "↷", dim: !redoStack.length }, { id: "mirror", t: "🪞", sel: opt.mirrorDraw }, { id: "clear", t: "🗑" }, { id: "save", t: "💾" }];
+  const rows = Math.ceil(items.length / 2);
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillStyle = "rgba(6,18,28,.6)"; ctx.fillRect(x - 4 * u, y - 4 * u, s + 8 * u, items.length * (s + g) + 4 * u);
+  ctx.fillStyle = "rgba(20,20,24,.62)"; rr(x0 - 5 * u, y0 - 5 * u, 2 * s + g + 10 * u, rows * (s + g) + 5 * u, 12 * u); ctx.fill();
   let hov = null;
-  for (const it of items) {
-    const r = { id: it.id, x, y, w: s, h: s }; tbRects.push(r);
-    const over = cursor && cursor.x >= x - 6 * u && cursor.x <= x + s + 6 * u && cursor.y >= y && cursor.y <= y + s; if (over) hov = it.id;
+  items.forEach((it, i) => {
+    const x = x0 + (i % 2) * (s + g), y = y0 + Math.floor(i / 2) * (s + g);
+    tbRects.push({ id: it.id, x, y, w: s, h: s });
+    const over = cursor && cursor.x >= x - 2 && cursor.x <= x + s + 2 && cursor.y >= y - 2 && cursor.y <= y + s + 2; if (over) hov = it.id;
     ctx.beginPath(); ctx.arc(x + s / 2, y + s / 2, s / 2 - 2, 0, 7);
     if (it.c) { if (it.c === "rainbow") { const gr = ctx.createConicGradient ? ctx.createConicGradient(now / 500, x + s / 2, y + s / 2) : null;
-        if (gr) ["red", "orange", "yellow", "lime", "cyan", "blue", "magenta", "red"].forEach((c, i, a) => gr.addColorStop(i / (a.length - 1), c)); ctx.fillStyle = gr || "#fff"; } else ctx.fillStyle = it.c; ctx.fill(); }
-    else { ctx.fillStyle = "rgba(255,255,255,.12)"; ctx.fill(); ctx.fillStyle = "#e9fbff"; ctx.font = `bold ${14 * u}px -apple-system,sans-serif`; ctx.fillText(it.t, x + s / 2, y + s / 2 + 1); }
-    ctx.lineWidth = (it.id === "ink" + inkIdx) ? 3 : over ? 2 : 1; ctx.strokeStyle = (it.id === "ink" + inkIdx || over) ? "#fff" : "rgba(255,255,255,.35)"; ctx.stroke();
+        if (gr) ["red", "orange", "yellow", "lime", "cyan", "blue", "magenta", "red"].forEach((c, k, a) => gr.addColorStop(k / (a.length - 1), c)); ctx.fillStyle = gr || "#fff"; } else ctx.fillStyle = it.c; ctx.fill(); }
+    else { ctx.fillStyle = it.sel ? "rgba(10,132,255,.85)" : "rgba(255,255,255,.12)"; ctx.fill(); ctx.globalAlpha = it.dim ? 0.35 : 1; ctx.fillStyle = "#fff"; ctx.font = `600 ${13 * u}px -apple-system,sans-serif`; ctx.fillText(it.t, x + s / 2, y + s / 2 + 1); ctx.globalAlpha = 1; }
+    ctx.lineWidth = it.sel ? 3 : over ? 2 : 1; ctx.strokeStyle = it.sel || over ? "#fff" : "rgba(255,255,255,.3)"; ctx.stroke();
     if (over && tbHover === it.id) { const k = Math.min(1, (now - tbHoverT) / 500); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x + s / 2, y + s / 2, s / 2 + 3, -1.57, -1.57 + k * 6.28); ctx.stroke(); }
-    y += s + g;
-  }
+  });
   ctx.restore();
   if (hov !== tbHover) { tbHover = hov; tbHoverT = now; } else if (hov && now - tbHoverT > 500) { toolbarAct(hov); tbHoverT = now + 1500; }
   return !!hov;
@@ -699,6 +895,29 @@ function strokePath(pts) {      // smooth curve through the points
   ctx.beginPath(); ctx.moveTo(pts[0].x * W(), pts[0].y * H());
   for (let i = 1; i < pts.length - 1; i++) { const a = pts[i], b = pts[i + 1]; ctx.quadraticCurveTo(a.x * W(), a.y * H(), (a.x + b.x) / 2 * W(), (a.y + b.y) / 2 * H()); }
   const l = pts[pts.length - 1]; ctx.lineTo(l.x * W(), l.y * H());
+}
+const rnd = i => { const x = Math.sin(i * 127.1) * 43758.5453; return x - Math.floor(x); };
+function renderStroke(s, now) {
+  const P = s.pts, col = i => s.c === "rainbow" ? `hsl(${(i * 6 + now / 20) % 360},100%,60%)` : s.c, b = s.b || "neon";
+  ctx.save(); ctx.lineCap = ctx.lineJoin = "round";
+  if (b === "neon") {
+    if (s.c === "rainbow") { ctx.shadowBlur = 12; for (let i = 1; i < P.length; i++) { ctx.strokeStyle = ctx.shadowColor = col(i); ctx.lineWidth = s.w; ctx.beginPath(); ctx.moveTo(P[i - 1].x * W(), P[i - 1].y * H()); ctx.lineTo(P[i].x * W(), P[i].y * H()); ctx.stroke(); } }
+    else { ctx.shadowColor = s.c; ctx.shadowBlur = 16; ctx.strokeStyle = s.c; ctx.lineWidth = s.w + 2; ctx.globalAlpha = 0.55; strokePath(P); ctx.stroke();
+      ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.strokeStyle = "rgba(255,255,255,.85)"; ctx.lineWidth = Math.max(1.5, s.w * 0.35); strokePath(P); ctx.stroke(); }
+  } else if (b === "marker" || b === "highlight") {
+    ctx.globalAlpha = b === "highlight" ? 0.35 : 1; ctx.lineCap = b === "highlight" ? "butt" : "round"; const w = b === "highlight" ? s.w * 3 : s.w * 1.3;
+    if (s.c === "rainbow") for (let i = 1; i < P.length; i++) { ctx.strokeStyle = col(i); ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(P[i - 1].x * W(), P[i - 1].y * H()); ctx.lineTo(P[i].x * W(), P[i].y * H()); ctx.stroke(); }
+    else { ctx.strokeStyle = s.c; ctx.lineWidth = w; strokePath(P); ctx.stroke(); }
+  } else if (b === "dotted") {
+    let acc = 0; for (let i = 1; i < P.length; i++) { const ax = P[i - 1].x * W(), ay = P[i - 1].y * H(), bx = P[i].x * W(), by = P[i].y * H(), L = Math.hypot(bx - ax, by - ay); const step = s.w * 1.8;
+      for (let t = (step - acc) % step; t < L; t += step) { ctx.fillStyle = col(i); ctx.beginPath(); ctx.arc(ax + (bx - ax) * t / L, ay + (by - ay) * t / L, s.w * 0.55, 0, 7); ctx.fill(); } acc = (acc + L) % step; }
+  } else if (b === "spray") {
+    for (let i = 0; i < P.length; i++) { ctx.fillStyle = col(i); for (let k = 0; k < 10; k++) { const a = rnd(i * 31 + k) * 6.283, r = Math.sqrt(rnd(i * 17 + k * 7)) * s.w * 2.2; ctx.fillRect(P[i].x * W() + Math.cos(a) * r, P[i].y * H() + Math.sin(a) * r, 1.6, 1.6); } }
+  } else if (b === "callig") {
+    for (let i = 1; i < P.length; i++) { const ax = P[i - 1].x * W(), ay = P[i - 1].y * H(), bx = P[i].x * W(), by = P[i].y * H(), ang = Math.atan2(by - ay, bx - ax);
+      ctx.strokeStyle = col(i); ctx.lineWidth = s.w * (0.35 + 1.3 * Math.abs(Math.sin(ang - Math.PI / 4))); ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke(); }
+  }
+  ctx.restore();
 }
 let peaceSince = 0;
 function drawAir(now) {
@@ -710,32 +929,27 @@ function drawAir(now) {
   const cursor = st ? toScreen(st.tip) : null;
   const onToolbar = drawToolbar(now, cursor);
   if (st && penOn && !onToolbar) { penPt = penPt ? { x: penPt.x + (st.tip.x - penPt.x) * 0.55, y: penPt.y + (st.tip.y - penPt.y) * 0.55 } : { ...st.tip }; if (raw) addInk(penPt); }
-  else if (!mouseInk) { drawing = null; penPt = null; }
+  else if (!mouseInk) { endInk(); penPt = null; }
   const peace = handSeen && !penOn && handSmooth.some(h => h.g === "Peace");   // ✌️ held = undo last stroke
-  if (peace) { peaceSince ||= now; if (now - peaceSince > 700) { if (X.strokes.length) { X.strokes.pop(); clickSound(900); } drawing = null; peaceSince = now + 1e9; } } else peaceSince = 0;
+  if (peace) { peaceSince ||= now; if (now - peaceSince > 700) { undoDraw(); peaceSince = now + 1e9; } } else peaceSince = 0;
   let eraseK = 0;
-  if (st?.open) { openSince ||= now; eraseK = (now - openSince) / 1000; if (eraseK >= 1) { if (X.strokes.length) clickSound(600); X.strokes = []; drawing = null; openSince = now + 1e9; } } else openSince = 0;
+  if (st?.open) { openSince ||= now; eraseK = (now - openSince) / 1000; if (eraseK >= 1) { if (X.strokes.length) clickSound(600); clearDraw(); openSince = now + 1e9; } } else openSince = 0;
   // ink
-  ctx.save(); ctx.lineCap = ctx.lineJoin = "round";
-  for (const s of X.strokes) { if (s.pts.length < 2) continue;
-    if (s.c === "rainbow") { ctx.shadowBlur = 12; for (let i = 1; i < s.pts.length; i++) { const c = `hsl(${(i * 6 + now / 20) % 360},100%,60%)`; ctx.strokeStyle = ctx.shadowColor = c; ctx.lineWidth = s.w;
-        ctx.beginPath(); ctx.moveTo(s.pts[i - 1].x * W(), s.pts[i - 1].y * H()); ctx.lineTo(s.pts[i].x * W(), s.pts[i].y * H()); ctx.stroke(); } continue; }
-    ctx.shadowColor = s.c; ctx.shadowBlur = 16; ctx.strokeStyle = s.c; ctx.lineWidth = s.w + 2; ctx.globalAlpha = 0.55; strokePath(s.pts); ctx.stroke();
-    ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.strokeStyle = "rgba(255,255,255,.85)"; ctx.lineWidth = Math.max(1.5, s.w * 0.35); strokePath(s.pts); ctx.stroke(); }
-  ctx.restore();
+  for (const s of X.strokes) if (s.pts.length > 1) renderStroke(s, now);
   // sparkles
   ctx.save(); for (let i = sparks.length - 1; i >= 0; i--) { const p = sparks[i]; p.x += p.vx; p.y += p.vy; p.life -= 0.06; if (p.life <= 0) { sparks.splice(i, 1); continue; }
     ctx.globalAlpha = p.life; ctx.fillStyle = INK[inkIdx] === "rainbow" ? `hsl(${now / 5 % 360},100%,70%)` : INK[inkIdx]; ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3); } ctx.restore();
   // pen cursor + status
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
-  if (cursor) { const col = INK[inkIdx] === "rainbow" ? "#fff" : INK[inkIdx];
+  if (cursor && drawTool === "eraser") { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 0.028 * H(), 0, 7); ctx.stroke(); ctx.setLineDash([]); }
+  else if (cursor) { const col = INK[inkIdx] === "rainbow" ? "#fff" : INK[inkIdx];
     ctx.strokeStyle = col; ctx.fillStyle = penOn ? col : "rgba(255,255,255,.25)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cursor.x, cursor.y, penOn ? 8 : 12, 0, 7); ctx.fill(); ctx.stroke();
     if (eraseK > 0) { ctx.strokeStyle = "#ff4d4d"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 22, -1.57, -1.57 + Math.min(1, eraseK) * 6.28); ctx.stroke(); } }
   ctx.restore();
   const msg = !handSeen && !mouseInk ? ["🖐 Show your hand to the camera (arm's length, good light)"]
-    : penOn ? ["✏️ DRAWING — curl your finger or open the pinch to lift the pen"]
+    : penOn ? [drawTool === "eraser" ? "🧽 ERASING — lift your finger to stop" : "✏️ DRAWING — curl your finger or open the pinch to lift the pen"]
     : eraseK > 0 ? ["✋ Keep holding open to erase…"]
-    : ["☝️ Point your index finger or 🤏 pinch to draw", "✌️ Peace sign = undo · ✋ open hand 1 s = erase all · ⌘Z"];
+    : ["☝️ Point your index finger or 🤏 pinch to draw", "✌️ peace = undo · ✋ open hand 1 s = clear · 🧽 eraser in toolbar"];
   panel(msg, W() / 2 - 170, H() - 26 - msg.length * 19, penOn ? "#2fd4ff" : "#e6edf3");
 }
 // draw with mouse / finger on the screen too
@@ -745,21 +959,14 @@ let mouseInk = false;
   out.addEventListener("pointerdown", e => { if (!active.has("draw")) return; const p = pt(e);
     const tb = tbRects.find(r => p.sx >= r.x && p.sx <= r.x + r.w && p.sy >= r.y && p.sy <= r.y + r.h); if (tb) { toolbarAct(tb.id); return; }
     if (active.has("ar") && (arButtons.some(b => p.sx >= b.x && p.sx <= b.x + b.w && p.sy >= b.y && p.sy <= b.y + b.h) || (arPanelRect && p.sx >= arPanelRect.x && p.sx <= arPanelRect.x + arPanelRect.w && p.sy >= arPanelRect.y && p.sy <= arPanelRect.y + arPanelRect.h))) return;
-    mouseInk = true; drawing = null; addInk(p.n); try { out.setPointerCapture(e.pointerId); } catch {} e.preventDefault(); });
+    mouseInk = true; endInk(); addInk(p.n); try { out.setPointerCapture(e.pointerId); } catch {} e.preventDefault(); });
   out.addEventListener("pointermove", e => { if (mouseInk) addInk(pt(e).n); });
-  for (const ev of ["pointerup", "pointercancel"]) out.addEventListener(ev, () => { if (mouseInk) { mouseInk = false; drawing = null; } });
+  for (const ev of ["pointerup", "pointercancel"]) out.addEventListener(ev, () => { if (mouseInk) { mouseInk = false; endInk(); } });
 })();
 // Workout reps (squats + both-arms-up raises)
 let squatDown = false, armsUp = false;
 const angle = (a, b, c) => { const v1 = [a.x - b.x, a.y - b.y], v2 = [c.x - b.x, c.y - b.y];
   return Math.acos(Math.max(-1, Math.min(1, (v1[0] * v2[0] + v1[1] * v2[1]) / (Math.hypot(...v1) * Math.hypot(...v2) + 1e-6)))) * 180 / Math.PI; };
-function runWorkout() {
-  const lm = R.pose?.landmarks?.[0]; if (!lm) return;
-  const knee = (angle(lm[23], lm[25], lm[27]) + angle(lm[24], lm[26], lm[28])) / 2, visible = (lm[25].visibility ?? 1) > 0.5 && (lm[26].visibility ?? 1) > 0.5;
-  if (visible) { if (knee < 105) squatDown = true; else if (knee > 160 && squatDown) { squatDown = false; X.squats++; if (!liveOn) say(String(X.squats)); } }
-  const up = lm[15].y < lm[0].y && lm[16].y < lm[0].y;
-  if (up && !armsUp) { armsUp = true; X.raises++; } else if (!up && lm[15].y > lm[11].y && lm[16].y > lm[12].y) armsUp = false;
-}
 function panel(lines, x, y, color = "#e6edf3") {
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.font = "bold 14px -apple-system,sans-serif";
   const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + 16, h = lines.length * 19 + 10;
@@ -771,7 +978,7 @@ function drawExtras(now) {
   if (active.has("text") && ocr) runOcr();
   if (active.has("qr") && models.qr) runQr();
   if (active.has("depth") && depthPipe) runDepth();
-  if (active.has("workout") && models.pose) runWorkout();
+  if (active.has("workout") && models.pose) runWorkout(now);
   if (active.has("gaze") && R.mesh) drawGaze(now);
   if (active.has("draw")) drawAir(now);
   if (active.has("text")) for (const w of X.words) { ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 2; ctx.strokeRect(w.x, w.y, w.w, w.h); }
@@ -780,7 +987,7 @@ function drawExtras(now) {
     const p = c.pts[0]; label("🔳 " + c.value.slice(0, 48), p.x + 200, p.y, "#3ddc84"); }
   let y = 28;
   if (active.has("scene") && X.scene.length) { panel(["Scene: " + X.scene.map(c => `${c.name} ${Math.round(c.score * 100)}%`).join(" · ")], 8, y); y += 34; }
-  if (active.has("workout")) { panel([`🏋️ Squats: ${X.squats}`, `🙌 Arm raises: ${X.raises}`], 8, y, "#ffd166"); y += 52; }
+  if (active.has("workout")) { drawWorkoutPanel(leftX(), y); y += 100; }
   if (active.has("text") && X.text) panel(["📖 " + X.text.slice(0, 90)], 8, H() - 64, "#ffd166");
   if (active.has("depth") && X.depth) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const w = W() * 0.32, h = w * X.depth.height / X.depth.width;
     ctx.globalAlpha = 0.9; ctx.drawImage(X.depth, W() - w - 8, H() - h - 8, w, h); ctx.restore(); panel(["Depth: bright = near"], W() - w - 8, H() - h - 40); }
@@ -844,11 +1051,6 @@ function drawPosture(now) {
   panel([`🪑 Posture: ${bad ? "slouching" : "good"} (${score}%)`], 8, H() - 136, bad ? "#ff8c42" : "#3ddc84");
   if (slouchSince && now - slouchSince > 4000) { banner("🪑 SIT UP STRAIGHT", "#ff8c42"); if (now - postureWarned > 30000) { postureWarned = now; say("Sit up straight, sir."); } }
 }
-// distance from the camera, estimated from face width (an average face is ~15 cm wide)
-function drawDistance() {
-  for (const d of R.faces || []) { const b = d.boundingBox, focal = W() * 0.85, cm = Math.round(15 * focal / Math.max(1, b.width));
-    X.distance = cm; label(`📏 ~${cm} cm (${(cm / 2.54).toFixed(0)} in)`, b.originX + b.width, b.originY + b.height + 24, "#9ad1ff"); }
-}
 // colour of whatever is under the crosshair
 const COLORS = [["Black",0,0,0],["White",255,255,255],["Gray",128,128,128],["Silver",192,192,192],["Red",220,30,30],["Dark red",120,10,10],["Pink",255,150,190],["Orange",255,140,0],["Brown",120,70,30],["Beige",225,205,165],["Yellow",250,220,30],["Gold",210,170,50],["Olive",120,120,30],["Green",40,170,60],["Dark green",20,80,30],["Lime",160,230,60],["Teal",20,130,130],["Cyan",40,210,230],["Sky blue",120,190,240],["Blue",30,80,220],["Navy",20,30,90],["Purple",120,50,160],["Violet",170,110,220],["Magenta",220,40,180],["Skin tone",210,160,130]];
 function drawColor() {
@@ -865,12 +1067,6 @@ function drawColor() {
 function drawFaceBlur() {
   for (const d of R.faces || []) { const b = d.boundingBox, pad = b.width * 0.25, x = Math.max(0, b.originX - pad), y = Math.max(0, b.originY - pad * 1.4), w = b.width + pad * 2, h = b.height + pad * 2.4;
     ctx.save(); ctx.beginPath(); ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, 7); ctx.clip(); ctx.filter = "blur(18px)"; ctx.drawImage(video, x, y, w, h, x, y, w, h); ctx.restore(); }
-}
-// people counter
-let peopleMax = 0;
-function drawPeople() {
-  const n = (R.objects || []).filter(d => d.categories[0].categoryName === "person" && d.categories[0].score > 0.45).length;
-  peopleMax = Math.max(peopleMax, n); X.people = n; panel([`👥 People: ${n}`, `Most at once: ${peopleMax}`], W() - 170, 30, "#9ad1ff");
 }
 // intruder alert: arms after 5 s, then sounds an alarm when a person shows up
 let intruderArmed = 0, lastAlarm = 0; const intruderLog = [];
@@ -915,45 +1111,100 @@ function drawPulse(now) {
   X.pulse = bpm;
   panel([bpm ? `❤️ ~${bpm} BPM (estimate, not medical)` : `❤️ Measuring… hold still ${Math.max(0, 8 - Math.floor((now - (ppg[0]?.[0] || now)) / 1000))}s`], 8, H() - 172, "#ff8c9a");
 }
-// =================== GHOST HUNTER (for fun) ===================
-// Real measurements, spooky presentation: motion where no person/animal is detected, sudden light flicker,
-// and "orbs" (tiny bright specks that pop in, usually dust or bugs). It does not detect actual ghosts.
-let gPrev = null, gLevel = 0, gLastAlarm = 0, gBright = 0; const gLog = [], gOrbs = [];
+// =================== GHOST HUNTER 2.0 (for fun) ===================
+// Real signal processing, spooky presentation. It learns your camera's normal noise for 3 s, cancels
+// auto-exposure flicker, ignores people/pets/hands, and only flags changes that persist for several
+// frames. Each anomaly is outlined and tracked. It reads motion & light — it does not detect actual ghosts.
+const GH = { prev: null, prevMean: 0, noise: null, heat: null, calibUntil: 0, blobs: [], nextId: 1, level: 0, log: [], events: 0, flick: 0, gw: 128, gh: 72 };
+function ghostRecalibrate() { GH.noise = null; GH.heat = null; GH.prev = null; GH.calibUntil = 0; GH.blobs = []; }
+function hull(pts) { if (pts.length < 3) return pts; pts = pts.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x), lo = [], up = [];
+  for (const p of pts) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+  for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+  return lo.slice(0, -1).concat(up.slice(0, -1)); }
 function drawGhost(now) {
-  const c = grab(96), gw = c.width, gh = c.height, d = wctx.getImageData(0, 0, gw, gh).data, gray = new Float32Array(gw * gh);
-  let mean = 0; for (let i = 0; i < gray.length; i++) { gray[i] = (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / 3; mean += gray[i]; } mean /= gray.length;
-  const k = W() / gw, explained = (R.objects || []).filter(o => /person|dog|cat|bird/.test(o.categories[0].categoryName) && o.categories[0].score > 0.35).map(o => o.boundingBox);
-  let unexplained = 0, cells = [];
-  if (gPrev) {
-    for (let y = 0; y < gh; y += 4) for (let x = 0; x < gw; x += 4) {
-      let diff = 0; for (let yy = y; yy < y + 4 && yy < gh; yy++) for (let xx = x; xx < x + 4 && xx < gw; xx++) diff += Math.abs(gray[yy * gw + xx] - gPrev[yy * gw + xx]);
-      diff /= 16; const px = x * k, py = y * k;
-      if (diff > 14 && !explained.some(b => px >= b.originX - 20 && px <= b.originX + b.width + 20 && py >= b.originY - 20 && py <= b.originY + b.height + 20)) { unexplained++; cells.push([px, py]); }
-      if (diff > 60 && gOrbs.length < 6 && Math.random() < 0.15) { let peak = 0; for (let yy = y; yy < y + 4 && yy < gh; yy++) for (let xx = x; xx < x + 4 && xx < gw; xx++) peak = Math.max(peak, gray[yy * gw + xx]);
-        if (peak > mean + 70) gOrbs.push({ x: px + 2 * k, y: py + 2 * k, t: now }); }
+  const gw = GH.gw, c = grab(gw), gh = GH.gh = c.height, d = wctx.getImageData(0, 0, gw, gh).data, N = gw * gh, gray = new Float32Array(N);
+  let mean = 0; for (let i = 0; i < N; i++) { gray[i] = d[i * 4] * 0.3 + d[i * 4 + 1] * 0.59 + d[i * 4 + 2] * 0.11; mean += gray[i]; } mean /= N;
+  const CS = 4, cw = Math.ceil(gw / CS), ch = Math.ceil(gh / CS), NC = cw * ch, k = W() / gw;
+  if (!GH.noise || GH.noise.length !== NC) { GH.noise = new Float32Array(NC).fill(4); GH.heat = new Float32Array(NC); GH.calibUntil = now + 3000; GH.prev = null; }
+  const calibrating = now < GH.calibUntil;
+  const expl = [];
+  for (const o of R.objects || []) if (/person|dog|cat|bird|horse/.test(o.categories[0].categoryName) && o.categories[0].score > 0.3) { const b = o.boundingBox; expl.push([b.originX - 25, b.originY - 25, b.originX + b.width + 25, b.originY + b.height + 25]); }
+  for (const lm of R.hands?.landmarks || []) { let x0 = 1, y0 = 1, x1 = 0, y1 = 0; for (const p of lm) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); } expl.push([x0 * W() - 40, y0 * H() - 40, x1 * W() + 40, y1 * H() + 40]); }
+  for (const lm of R.mesh?.faceLandmarks || []) { let x0 = 1, y0 = 1, x1 = 0, y1 = 0; for (const p of lm) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); } expl.push([x0 * W() - 60, y0 * H() - 60, x1 * W() + 60, y1 * H() + 200]); }
+  const active2 = new Uint8Array(NC), cellDiff = new Float32Array(NC);
+  let flicker = 0;
+  if (GH.prev) {
+    const shift = mean - GH.prevMean; flicker = Math.abs(shift);                    // cancel auto-exposure / global light changes
+    for (let cy = 0; cy < ch; cy++) for (let cx = 0; cx < cw; cx++) {
+      let s = 0, n = 0; for (let y = cy * CS; y < Math.min(gh, cy * CS + CS); y++) for (let x = cx * CS; x < Math.min(gw, cx * CS + CS); x++) { const i = y * gw + x; s += Math.abs(gray[i] - GH.prev[i] - shift); n++; }
+      const ci = cy * cw + cx, v = s / n; cellDiff[ci] = v;
+      if (calibrating) { GH.noise[ci] = GH.noise[ci] * 0.9 + v * 0.1; continue; }
+      const thr = (GH.noise[ci] * 3 + 7) / opt.ghostSens, px = (cx + 0.5) * CS * k, py = (cy + 0.5) * CS * k;
+      const anom = v > thr && !expl.some(b => px > b[0] && px < b[2] && py > b[1] && py < b[3]);
+      if (!anom) GH.noise[ci] = GH.noise[ci] * 0.995 + v * 0.005;                     // slowly keep learning the background
+      GH.heat[ci] = GH.heat[ci] * 0.7 + (anom ? 1 : 0);
+      if (GH.heat[ci] > 1.3) active2[ci] = 1;                                          // must persist ~2–3 frames: far less jumpy
     }
   }
-  gPrev = gray;
-  const flicker = gBright ? Math.abs(mean - gBright) : 0; gBright = gBright ? gBright * 0.9 + mean * 0.1 : mean;
-  const raw = Math.min(5, unexplained / 6 + flicker / 4 + gOrbs.length * 0.4);
-  gLevel = gLevel * 0.85 + raw * 0.15;
-  // ectoplasm where the unexplained motion is
-  ctx.save(); ctx.globalCompositeOperation = "lighter";
-  for (const [x, y] of cells) { const g = ctx.createRadialGradient(x + 2 * k, y + 2 * k, 0, x + 2 * k, y + 2 * k, 6 * k); g.addColorStop(0, "rgba(120,255,170,.35)"); g.addColorStop(1, "rgba(120,255,170,0)"); ctx.fillStyle = g; ctx.fillRect(x - 4 * k, y - 4 * k, 12 * k, 12 * k); }
-  for (let i = gOrbs.length - 1; i >= 0; i--) { const o = gOrbs[i], age = (now - o.t) / 1500; if (age > 1) { gOrbs.splice(i, 1); continue; }
-    const g = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, 18); g.addColorStop(0, `rgba(255,255,255,${0.8 * (1 - age)})`); g.addColorStop(1, "rgba(180,220,255,0)"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(o.x, o.y, 18, 0, 7); ctx.fill(); }
+  GH.prev = gray; GH.prevMean = mean;
+  GH.flick = GH.flick * 0.9 + flicker * 0.1;
+  // group active cells into blobs (connected components)
+  const seen2 = new Uint8Array(NC), found = [];
+  for (let i = 0; i < NC; i++) { if (!active2[i] || seen2[i]) continue; const st = [i], cells = []; seen2[i] = 1;
+    while (st.length) { const j = st.pop(); cells.push(j); const x = j % cw, y = (j / cw) | 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1]]) { const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= cw || ny >= ch) continue; const q = ny * cw + nx; if (active2[q] && !seen2[q]) { seen2[q] = 1; st.push(q); } } }
+    if (cells.length < 2) continue;
+    const pts = cells.map(j => ({ x: ((j % cw) + 0.5) * CS * k, y: (((j / cw) | 0) + 0.5) * CS * k }));
+    let bright = 0, inten = 0; for (const j of cells) { inten += cellDiff[j]; const x = (j % cw) * CS, y = ((j / cw) | 0) * CS; bright += gray[Math.min(N - 1, y * gw + x)]; }
+    const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length, cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+    found.push({ cx, cy, pts, n: cells.length, inten: inten / cells.length, bright: bright / cells.length });
+  }
+  // track blobs over time so outlines glide and each anomaly keeps an ID
+  for (const b of GH.blobs) b.matched = false;
+  for (const f of found) {
+    let best = null, bd = 1e9; for (const b of GH.blobs) { if (b.matched) continue; const dd = Math.hypot(b.cx - f.cx, b.cy - f.cy); if (dd < Math.max(60, Math.sqrt(f.n) * CS * k * 1.5) && dd < bd) { bd = dd; best = b; } }
+    const type = f.n <= 4 && f.bright > mean + 50 ? "orb" : f.bright < mean - 25 ? "shadow" : f.n > NC * 0.08 ? "mass movement" : "apparition";
+    if (best) { best.vx = best.vx * 0.7 + (f.cx - best.cx) * 0.3; best.vy = best.vy * 0.7 + (f.cy - best.cy) * 0.3; best.cx += (f.cx - best.cx) * 0.5; best.cy += (f.cy - best.cy) * 0.5;
+      best.hullPts = hull(f.pts).map((p, i, a) => p); best.n = best.n * 0.6 + f.n * 0.4; best.inten = best.inten * 0.7 + f.inten * 0.3; best.seen = now; best.matched = true; best.type = type; }
+    else GH.blobs.push({ id: GH.nextId++, cx: f.cx, cy: f.cy, vx: 0, vy: 0, hullPts: hull(f.pts), n: f.n, inten: f.inten, born: now, seen: now, matched: true, type, logged: false });
+  }
+  GH.blobs = GH.blobs.filter(b => now - b.seen < 450);
+  const shown = GH.blobs.filter(b => now - b.born > 250);                              // must last 0.25 s before it's shown
+  // outlines
+  ctx.save();
+  for (const b of shown) {
+    const age = (now - b.born) / 1000, fade = Math.max(0, 1 - (now - b.seen) / 450), col = b.type === "orb" ? "180,220,255" : b.type === "shadow" ? "190,120,255" : "120,255,170";
+    const hp = b.hullPts; if (hp.length < 3) continue;
+    const cxs = hp.reduce((s, p) => s + p.x, 0) / hp.length, cys = hp.reduce((s, p) => s + p.y, 0) / hp.length, pad = CS * k * 0.9;
+    const P = hp.map(p => { const dx = p.x - cxs, dy = p.y - cys, l = Math.hypot(dx, dy) || 1; return { x: p.x + dx / l * pad, y: p.y + dy / l * pad }; });
+    ctx.globalAlpha = fade; ctx.globalCompositeOperation = "lighter";
+    const g = ctx.createRadialGradient(cxs, cys, 0, cxs, cys, Math.sqrt(b.n) * CS * k);
+    g.addColorStop(0, `rgba(${col},.35)`); g.addColorStop(1, `rgba(${col},0)`); ctx.fillStyle = g;
+    ctx.beginPath(); P.forEach((p, i) => { const n2 = P[(i + 1) % P.length], mx = (p.x + n2.x) / 2, my = (p.y + n2.y) / 2; i ? ctx.quadraticCurveTo(p.x, p.y, mx, my) : ctx.moveTo(mx, my); }); ctx.closePath(); ctx.fill();
+    ctx.globalCompositeOperation = "source-over"; ctx.strokeStyle = `rgba(${col},.95)`; ctx.lineWidth = 2; ctx.setLineDash([6, 4]); ctx.lineDashOffset = -now / 40; ctx.shadowColor = `rgb(${col})`; ctx.shadowBlur = 12; ctx.stroke(); ctx.setLineDash([]); ctx.shadowBlur = 0;
+    const sp = Math.hypot(b.vx, b.vy), dir = sp < 1.5 ? "hovering" : Math.abs(b.vx) > Math.abs(b.vy) ? ((mirror ? -b.vx : b.vx) > 0 ? "drifting right" : "drifting left") : (b.vy > 0 ? "sinking" : "rising");
+    let top = Infinity, right = -Infinity; for (const p of P) { top = Math.min(top, p.y); right = Math.max(right, p.x); }
+    label(`👻 #${b.id} ${b.type} · ${age.toFixed(1)}s · ${dir} · ${Math.round(b.inten)}`, right, top - 4, `rgb(${col})`);
+    if (!b.logged && age > 0.6) { b.logged = true; GH.events++; GH.log.unshift(`${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })} #${b.id} ${b.type}`); GH.log.length = Math.min(GH.log.length, 4); X.ghost = GH.log[0]; if (GH.level > 2.5) beep(); }
+  }
   ctx.restore();
-  if (gLevel > 3.6 && now - gLastAlarm > 6000) { gLastAlarm = now; beep(); gLog.unshift(`${new Date().toLocaleTimeString()} — ${gOrbs.length ? "orb" : flicker > 6 ? "light flicker" : "unexplained motion"}`); gLog.length = Math.min(gLog.length, 3); X.ghost = gLog[0]; }
-  if (gLevel > 3.6) banner("👻 ANOMALY DETECTED", "#78ffaa");
-  // EMF-style meter
-  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const u = Math.min(H() / 360, W() / 420), x0 = 10 * u, y0 = H() * 0.32, lw = 26 * u, lh = 14 * u;
-  ctx.fillStyle = "rgba(6,12,8,.75)"; ctx.fillRect(x0 - 6 * u, y0 - 26 * u, 5 * (lw + 4 * u) + 8 * u, 58 * u + gLog.length * 15 * u);
-  ctx.font = `bold ${11 * u}px monospace`; ctx.fillStyle = "#78ffaa"; ctx.fillText("👻 PARANORMAL METER", x0, y0 - 10 * u);
-  const cols = ["#3ddc84", "#a6e22e", "#ffd166", "#ff8c42", "#ff4d4d"];
-  for (let i = 0; i < 5; i++) { ctx.fillStyle = gLevel > i + 0.5 ? cols[i] : "rgba(255,255,255,.12)"; if (gLevel > i + 0.5) { ctx.shadowColor = cols[i]; ctx.shadowBlur = 12; } ctx.fillRect(x0 + i * (lw + 4 * u), y0, lw, lh); ctx.shadowBlur = 0; }
-  ctx.font = `${9.5 * u}px monospace`; ctx.fillStyle = "#cfe"; ctx.fillText(`motion ${unexplained} · flicker ${flicker.toFixed(1)} · orbs ${gOrbs.length}`, x0, y0 + lh + 13 * u);
-  gLog.forEach((l, i) => { ctx.fillStyle = "#ff8c9a"; ctx.fillText("⚠ " + l, x0, y0 + lh + 28 * u + i * 15 * u); });
-  ctx.fillStyle = "rgba(255,255,255,.5)"; ctx.fillText("for fun: reads motion & light, not real ghosts", x0, y0 + lh + 28 * u + gLog.length * 15 * u);
+  const raw = Math.min(5, shown.reduce((s, b) => s + Math.min(2, b.n / 25) * Math.min(1, (now - b.born) / 1500), 0) + Math.max(0, GH.flick - 2) / 3);
+  GH.level = GH.level * 0.93 + raw * 0.07;
+  if (GH.level > 3.5) banner("👻 STRONG ANOMALY", "#78ffaa");
+  // info panel
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const u = Math.min(H() / 360, W() / 420), x0 = leftX() + 2 * u, y0 = H() * 0.28 + (active.has("workout") ? 70 * u : 0), lw = 24 * u, lh = 12 * u, rows = 6 + GH.log.length, pw = 236 * u, ph = (44 + rows * 14) * u;
+  ctx.fillStyle = "rgba(4,12,8,.78)"; rr(x0 - 6 * u, y0 - 28 * u, pw, ph, 12 * u); ctx.fill(); ctx.strokeStyle = "rgba(120,255,170,.35)"; ctx.stroke();
+  ctx.font = `700 ${11 * u}px monospace`; ctx.fillStyle = "#78ffaa"; ctx.fillText(calibrating ? `👻 CALIBRATING… ${Math.ceil((GH.calibUntil - now) / 1000)}s — keep still` : "👻 PARANORMAL SCANNER", x0, y0 - 12 * u);
+  const cols = ["#30d158", "#a6e22e", "#ffd60a", "#ff9f0a", "#ff453a"];
+  for (let i = 0; i < 5; i++) { const on = GH.level > i + 0.4; ctx.fillStyle = on ? cols[i] : "rgba(255,255,255,.1)"; if (on) { ctx.shadowColor = cols[i]; ctx.shadowBlur = 10; } rr(x0 + i * (lw + 4 * u), y0, lw, lh, 3); ctx.fill(); ctx.shadowBlur = 0; }
+  ctx.font = `${10 * u}px monospace`; ctx.fillStyle = "#cfe"; const big = shown.reduce((m, b) => Math.max(m, b.n), 0);
+  const info = [`EMF-style level  ${GH.level.toFixed(1)} / 5`, `active anomalies ${shown.length}  (orbs ${shown.filter(b => b.type === "orb").length}, shadows ${shown.filter(b => b.type === "shadow").length})`,
+    `largest          ${(big / NC * 100).toFixed(1)}% of view`, `light flicker    ${GH.flick.toFixed(1)}`, `noise floor      ${(GH.noise.reduce((a, b) => a + b, 0) / NC).toFixed(1)}  ·  sens ${opt.ghostSens.toFixed(1)}x`, `events logged    ${GH.events}`];
+  info.forEach((t, i) => ctx.fillText(t, x0, y0 + lh + (14 + i * 14) * u));
+  GH.log.forEach((l, i) => { ctx.fillStyle = "#ff8c9a"; ctx.fillText("⚠ " + l, x0, y0 + lh + (14 + (info.length + i) * 14) * u); });
+  ctx.fillStyle = "rgba(255,255,255,.45)"; ctx.fillText("for fun: reads motion & light, not real ghosts", x0, y0 - 28 * u + ph - 6 * u);
   ctx.restore();
 }
 // =================== THOUGHTS & PREDICTIONS ===================
@@ -1182,21 +1433,539 @@ function drawAR(now) {
     const R2 = arPanelRect; if (R2 && p.x >= R2.x && p.x <= R2.x + R2.w && p.y >= R2.y && p.y <= R2.y + R2.bar) { drag = { dx: p.x - R2.x, dy: p.y - R2.y }; out.setPointerCapture(e.pointerId); e.preventDefault(); } });
   out.addEventListener("pointermove", e => { if (drag) { const p = pt(e); AR.pos[AR.page] = { x: p.x - drag.dx, y: p.y - drag.dy }; } });
   out.addEventListener("pointerup", () => drag = null); })();
+// =================== WORKOUT LIBRARY (search + favourites) ===================
+// Every exercise is a joint-angle (or position) signal with a "rest" and a "peak" threshold.
+// A rep counts when you go rest → peak → back to rest, so half reps and wobbles don't count.
+const PX = (lm, i) => ({ x: lm[i].x * W(), y: lm[i].y * H() });
+const A = (lm, a, b, c) => angle(PX(lm, a), PX(lm, b), PX(lm, c));
+const mid = (p, q) => ({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
+const dpx = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+const SH = lm => mid(PX(lm, 11), PX(lm, 12)), HP = lm => mid(PX(lm, 23), PX(lm, 24)), AN = lm => mid(PX(lm, 27), PX(lm, 28)), KN = lm => mid(PX(lm, 25), PX(lm, 26)), WR = lm => mid(PX(lm, 15), PX(lm, 16));
+const shW = lm => Math.max(10, dpx(PX(lm, 11), PX(lm, 12))), torso = lm => Math.max(10, dpx(SH(lm), HP(lm))), legLen = lm => Math.max(10, dpx(HP(lm), AN(lm)));
+const horizontal = lm => { const s = SH(lm), a = AN(lm); return Math.abs(s.y - a.y) < Math.abs(s.x - a.x) * 0.8; };
+const upright = lm => { const s = SH(lm), h = HP(lm); return h.y > s.y && Math.abs(h.y - s.y) > Math.abs(h.x - s.x); };
+const kneeE = lm => [A(lm, 23, 25, 27), A(lm, 24, 26, 28)], kneeAvg = lm => (A(lm, 23, 25, 27) + A(lm, 24, 26, 28)) / 2;
+const elbE = lm => [A(lm, 11, 13, 15), A(lm, 12, 14, 16)], elbAvg = lm => (A(lm, 11, 13, 15) + A(lm, 12, 14, 16)) / 2;
+const hipE = lm => [A(lm, 11, 23, 25), A(lm, 12, 24, 26)], hipAvg = lm => (A(lm, 11, 23, 25) + A(lm, 12, 24, 26)) / 2;
+const abdAvg = lm => (A(lm, 23, 11, 13) + A(lm, 24, 12, 14)) / 2, lineAvg = lm => (A(lm, 11, 23, 27) + A(lm, 12, 24, 28)) / 2;
+const wristsUp = lm => lm[15].y < lm[11].y && lm[16].y < lm[12].y;
+let jumpBase = 0;
+const ARMS = [11, 12, 13, 14, 15, 16], LEGS = [23, 24, 25, 26, 27, 28], BODY = [11, 12, 23, 24, 25, 26, 27, 28], ALL = [...ARMS, ...LEGS];
+const EXERCISES = [
+  // legs
+  { id: "squat", name: "Squats", cat: "Legs", m: kneeAvg, r: 160, p: 100, need: LEGS, tip: "Hips back, chest up, thighs to parallel" },
+  { id: "sumo", name: "Sumo squats", cat: "Legs", m: kneeAvg, r: 160, p: 105, need: LEGS, tip: "Wide stance, toes out" },
+  { id: "jumpsquat", name: "Jump squats", cat: "Legs", m: kneeAvg, r: 160, p: 105, need: LEGS, tip: "Explode up, land soft" },
+  { id: "pistol", name: "Pistol squats", cat: "Legs", m: lm => Math.min(...kneeE(lm)), r: 160, p: 80, need: LEGS, tip: "One leg, other leg straight out" },
+  { id: "lunge", name: "Lunges", cat: "Legs", m: lm => Math.min(...kneeE(lm)), r: 160, p: 100, need: LEGS, tip: "Back knee toward the floor, front knee over ankle" },
+  { id: "deadlift", name: "Deadlifts / RDLs", cat: "Legs", m: hipAvg, r: 165, p: 110, need: BODY, when: lm => kneeAvg(lm) > 120, whenMsg: "Keep legs mostly straight", tip: "Hinge at the hips, flat back" },
+  { id: "goodmorning", name: "Good mornings", cat: "Legs", m: hipAvg, r: 165, p: 115, need: BODY, tip: "Hinge forward, back flat" },
+  { id: "kbswing", name: "Kettlebell swings", cat: "Legs", m: hipAvg, r: 165, p: 115, need: BODY, tip: "Snap the hips, arms are just ropes" },
+  { id: "bridge", name: "Glute bridges", cat: "Legs", m: hipAvg, r: 140, p: 165, need: BODY, tip: "Squeeze glutes at the top" },
+  { id: "calf", name: "Calf raises", cat: "Legs", m: lm => ((PX(lm, 31).y - PX(lm, 29).y) + (PX(lm, 32).y - PX(lm, 30).y)) / 2 / legLen(lm), r: 0.03, p: 0.08, need: [27, 28, 29, 30, 31, 32], tip: "Side-on to the camera works best" },
+  { id: "sidelegraise", name: "Side leg raises", cat: "Legs", m: lm => angle(PX(lm, 25), HP(lm), PX(lm, 26)), r: 18, p: 40, need: LEGS, tip: "Keep the raised leg straight" },
+  { id: "wallsit", name: "Wall sit", cat: "Legs", kind: "hold", cond: lm => { const k = kneeAvg(lm); return k > 65 && k < 120 && upright(lm); }, need: LEGS, tip: "Thighs parallel, back on the wall" },
+  { id: "balance", name: "Single-leg balance", cat: "Legs", kind: "hold", cond: lm => Math.abs(PX(lm, 27).y - PX(lm, 28).y) > legLen(lm) * 0.15, need: LEGS, tip: "Lift one foot, stay steady" },
+  // push / arms
+  { id: "pushup", name: "Push-ups", cat: "Push", m: elbAvg, r: 155, p: 95, need: ARMS, when: horizontal, whenMsg: "Get into a plank (side-on to the camera)", tip: "Chest to fist height, body in a line" },
+  { id: "widepush", name: "Wide push-ups", cat: "Push", m: elbAvg, r: 155, p: 100, need: ARMS, when: horizontal, whenMsg: "Get into a plank", tip: "Hands wider than shoulders" },
+  { id: "diamond", name: "Diamond push-ups", cat: "Push", m: elbAvg, r: 155, p: 95, need: ARMS, when: horizontal, whenMsg: "Get into a plank", tip: "Hands together under chest" },
+  { id: "pikepush", name: "Pike push-ups", cat: "Push", m: elbAvg, r: 155, p: 100, need: ARMS, tip: "Hips high, head toward the floor" },
+  { id: "dips", name: "Dips", cat: "Push", m: elbAvg, r: 155, p: 95, need: ARMS, when: lm => !horizontal(lm), tip: "Elbows back, shoulders down" },
+  { id: "bench", name: "Bench / floor press", cat: "Push", m: elbAvg, r: 95, p: 160, need: ARMS, tip: "Lower with control" },
+  { id: "press", name: "Shoulder press", cat: "Push", m: elbAvg, r: 95, p: 160, need: ARMS, when: wristsUp, whenMsg: "Hands at shoulder height to start", tip: "Press straight overhead" },
+  { id: "triext", name: "Overhead tricep extensions", cat: "Arms", m: elbAvg, r: 75, p: 150, need: ARMS, when: wristsUp, whenMsg: "Arms overhead", tip: "Elbows stay pointing up" },
+  { id: "kickback", name: "Tricep kickbacks", cat: "Arms", m: elbE, r: 85, p: 150, need: ARMS, tip: "Upper arm still, straighten fully" },
+  { id: "curl", name: "Bicep curls", cat: "Arms", m: elbE, r: 150, p: 55, need: ARMS, tip: "Elbows pinned to your sides" },
+  { id: "hammer", name: "Hammer curls", cat: "Arms", m: elbE, r: 150, p: 60, need: ARMS, tip: "Thumbs up the whole time" },
+  { id: "lateral", name: "Lateral raises", cat: "Arms", m: abdAvg, r: 25, p: 75, need: ARMS, tip: "Lead with the elbows to shoulder height" },
+  { id: "frontraise", name: "Front raises", cat: "Arms", m: abdAvg, r: 25, p: 75, need: ARMS, tip: "Stand side-on so I can see the arc" },
+  { id: "row", name: "Rows", cat: "Pull", m: elbAvg, r: 150, p: 85, need: ARMS, tip: "Squeeze shoulder blades together" },
+  { id: "pullup", name: "Pull-ups / chin-ups", cat: "Pull", m: lm => (PX(lm, 0).y - WR(lm).y) / torso(lm), r: 0.55, p: 0.05, need: [0, ...ARMS], when: wristsUp, whenMsg: "Hang from the bar", tip: "Chin over the bar" },
+  { id: "deadhang", name: "Dead hang", cat: "Pull", kind: "hold", cond: lm => wristsUp(lm) && elbAvg(lm) > 150, need: ARMS, tip: "Relax the shoulders, grip tight" },
+  { id: "punch", name: "Punches / shadow boxing", cat: "Cardio", m: elbE, r: 90, p: 155, need: ARMS, tip: "Snap it out, snap it back" },
+  { id: "armraise", name: "Overhead arm raises", cat: "Arms", m: lm => (lm[15].y < lm[0].y) + (lm[16].y < lm[0].y), r: 0, p: 2, need: [0, 15, 16], tip: "Both hands above your head" },
+  { id: "shrug", name: "Shoulder shrugs", cat: "Arms", m: lm => (SH(lm).y - mid(PX(lm, 7), PX(lm, 8)).y) / shW(lm), r: 0.42, p: 0.3, need: [7, 8, 11, 12], tip: "Shoulders to ears, pause" },
+  // core
+  { id: "situp", name: "Sit-ups", cat: "Core", m: hipAvg, r: 130, p: 70, need: BODY, tip: "Side-on to the camera" },
+  { id: "crunch", name: "Crunches", cat: "Core", m: hipAvg, r: 150, p: 120, need: BODY, tip: "Small, controlled lift" },
+  { id: "vup", name: "V-ups", cat: "Core", m: hipAvg, r: 150, p: 80, need: BODY, tip: "Reach hands to toes" },
+  { id: "legraise", name: "Leg raises", cat: "Core", m: lineAvg, r: 165, p: 110, need: BODY, tip: "Lower back flat on the floor" },
+  { id: "twist", name: "Russian twists", cat: "Core", alt: true, m: lm => (WR(lm).x - HP(lm).x) / shW(lm), r: -0.35, p: 0.35, need: [11, 12, 15, 16, 23, 24], tip: "Each side counts as one" },
+  { id: "sidebend", name: "Side bends", cat: "Core", alt: true, m: lm => (SH(lm).x - HP(lm).x) / shW(lm), r: -0.22, p: 0.22, need: [11, 12, 23, 24], tip: "Each side counts as one" },
+  { id: "bicycle", name: "Bicycle crunches", cat: "Core", m: lm => [dpx(PX(lm, 13), PX(lm, 26)) / torso(lm), dpx(PX(lm, 14), PX(lm, 25)) / torso(lm)], r: 0.8, p: 0.4, need: [13, 14, 25, 26, 11, 12, 23, 24], tip: "Elbow to opposite knee" },
+  { id: "flutter", name: "Flutter kicks", cat: "Core", alt: true, m: lm => (PX(lm, 27).y - PX(lm, 28).y) / legLen(lm), r: -0.08, p: 0.08, need: LEGS, tip: "Small fast kicks" },
+  { id: "plank", name: "Plank", cat: "Core", kind: "hold", cond: lm => horizontal(lm) && lineAvg(lm) > 155, need: BODY, tip: "Straight line head to heels" },
+  { id: "sideplank", name: "Side plank", cat: "Core", kind: "hold", cond: lm => lineAvg(lm) > 155 && !upright(lm), need: BODY, tip: "Hips high" },
+  // cardio
+  { id: "jacks", name: "Jumping jacks", cat: "Cardio", m: lm => (wristsUp(lm) ? 1 : 0) + (Math.abs(PX(lm, 27).x - PX(lm, 28).x) > dpx(PX(lm, 23), PX(lm, 24)) * 1.6 ? 1 : 0), r: 0, p: 2, need: ALL, tip: "Hands overhead, feet wide" },
+  { id: "burpee", name: "Burpees", cat: "Cardio", m: lm => { const s = SH(lm), a = AN(lm); return Math.abs(s.y - a.y) / Math.max(1, Math.abs(s.x - a.x)); }, r: 2, p: 0.6, need: BODY, tip: "Stand → plank → stand = 1" },
+  { id: "highknees", name: "High knees", cat: "Cardio", m: hipE, r: 150, p: 105, need: BODY, tip: "Knees to hip height" },
+  { id: "buttkicks", name: "Butt kicks", cat: "Cardio", m: kneeE, r: 150, p: 70, need: LEGS, tip: "Heels to glutes" },
+  { id: "climbers", name: "Mountain climbers", cat: "Cardio", m: hipE, r: 150, p: 100, need: BODY, when: horizontal, whenMsg: "Get into a plank", tip: "Knee to chest, fast" },
+  { id: "jumprope", name: "Jump rope / hops", cat: "Cardio", m: lm => { const y = AN(lm).y; jumpBase = jumpBase ? (y > jumpBase ? jumpBase * 0.9 + y * 0.1 : jumpBase * 0.995 + y * 0.005) : y; return (jumpBase - y) / legLen(lm); }, r: 0.02, p: 0.06, need: [27, 28, 23, 24], tip: "Small quick hops" },
+  // mobility
+  { id: "toetouch", name: "Toe touches", cat: "Mobility", m: lm => (WR(lm).y - HP(lm).y) / Math.max(10, KN(lm).y - HP(lm).y), r: 0.3, p: 1.1, need: [15, 16, 23, 24, 25, 26], tip: "Hinge down, reach past your knees" },
+  { id: "necktilt", name: "Neck tilts", cat: "Mobility", alt: true, m: lm => Math.atan2(lm[8].y - lm[7].y, lm[8].x - lm[7].x) * 180 / Math.PI * (lm[8].x < lm[7].x ? -1 : 1), r: -12, p: 12, need: [7, 8], tip: "Ear toward shoulder, each side" },
+];
+const EXI = Object.fromEntries(EXERCISES.map(e => [e.id, e]));
+const PART = { 0: "head", 7: "head", 8: "head", 11: "shoulders", 12: "shoulders", 13: "elbows", 14: "elbows", 15: "wrists", 16: "wrists", 23: "hips", 24: "hips", 25: "knees", 26: "knees", 27: "ankles", 28: "ankles", 29: "feet", 30: "feet", 31: "feet", 32: "feet" };
+const WK = { st: {}, counts: store.get("reps", {}), best: store.get("holdBest", {}), msg: "", prog: 0, flash: 0, hold: 0, holdOk: false };
+function repDone(ex) { WK.counts[ex.id] = (WK.counts[ex.id] || 0) + 1; store.set("reps", WK.counts); WK.flash = performance.now();
+  if (opt.repVoice && !(typeof liveOn !== "undefined" && liveOn)) say(String(WK.counts[ex.id])); const c = $("wkCount"); if (c) c.textContent = WK.counts[ex.id]; }
+function runWorkout(now = performance.now()) {
+  const ex = EXI[opt.ex] || EXERCISES[0], lm = R.pose?.landmarks?.[0];
+  WK.msg = ""; if (!lm) { WK.msg = "Step into view"; return; }
+  const miss = [...new Set(ex.need.filter(i => (lm[i]?.visibility ?? 1) < 0.35).map(i => PART[i]))];
+  if (miss.length) { WK.msg = "Step back — I need to see your " + miss.join(", "); return; }
+  if (ex.when && !ex.when(lm)) { WK.msg = ex.whenMsg || "Get into position"; WK.prog = 0; return; }
+  const st = WK.st[ex.id] ||= { ph: [], ema: [], t: 0, last: now, broke: 0 };
+  if (ex.kind === "hold") {
+    const ok = ex.cond(lm), dt = Math.min(0.2, (now - st.last) / 1000); st.last = now; WK.holdOk = ok;
+    if (ok) { st.t += dt; st.broke = 0; const prevSec = Math.floor(st.t - dt); if (Math.floor(st.t) % 10 === 0 && Math.floor(st.t) !== prevSec && st.t > 1 && opt.repVoice) say(Math.floor(st.t) + " seconds"); }
+    else { st.broke ||= now; if (now - st.broke > 1500 && st.t > 0) { if (st.t > (WK.best[ex.id] || 0)) { WK.best[ex.id] = Math.round(st.t); store.set("holdBest", WK.best); } st.t = 0; } }
+    WK.hold = st.t; return;
+  }
+  const vals = [].concat(ex.m(lm)), dir = Math.sign(ex.p - ex.r);
+  let prog = 0;
+  vals.forEach((raw, i) => {
+    if (!isFinite(raw)) return;
+    const v = st.ema[i] = st.ema[i] == null ? raw : st.ema[i] * 0.45 + raw * 0.55;
+    const isRest = dir > 0 ? v <= ex.r : v >= ex.r, isPeak = dir > 0 ? v >= ex.p : v <= ex.p;
+    prog = Math.max(prog, Math.max(0, Math.min(1, (v - ex.r) / (ex.p - ex.r))));
+    if (ex.alt) { if (isPeak && st.ph[i] !== "peak") { if (st.ph[i]) repDone(ex); st.ph[i] = "peak"; } else if (isRest && st.ph[i] !== "rest") { if (st.ph[i]) repDone(ex); st.ph[i] = "rest"; } return; }
+    if (!st.ph[i]) { if (isRest) st.ph[i] = "rest"; return; }
+    if (st.ph[i] === "rest" && isPeak) st.ph[i] = "peak";
+    else if (st.ph[i] === "peak" && isRest) { st.ph[i] = "rest"; repDone(ex); }
+  });
+  WK.prog = prog;
+}
+function drawWorkoutPanel(x, y) {
+  const ex = EXI[opt.ex] || EXERCISES[0], hold = ex.kind === "hold", n = hold ? Math.floor(WK.hold) : (WK.counts[ex.id] || 0);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const w = 230, h = 92, flash = performance.now() - WK.flash < 300;
+  ctx.fillStyle = flash ? "rgba(48,209,88,.55)" : "rgba(20,20,24,.72)"; rr(x, y, w, h, 14); ctx.fill();
+  ctx.fillStyle = "#8e8e93"; ctx.font = "600 11px -apple-system,sans-serif"; ctx.fillText(("🏋️ " + ex.name).toUpperCase(), x + 12, y + 18);
+  ctx.fillStyle = "#fff"; ctx.font = "700 40px -apple-system,sans-serif"; ctx.fillText(hold ? n + "s" : String(n), x + 12, y + 60);
+  ctx.font = "12px -apple-system,sans-serif"; ctx.fillStyle = WK.msg ? "#ff9f0a" : "#8e8e93";
+  ctx.fillText((WK.msg || (hold ? (WK.holdOk ? "Holding — nice" : "Get into position") + ` · best ${WK.best[ex.id] || 0}s` : ex.tip)).slice(0, 36), x + 12, y + 80);
+  if (!hold) { ctx.fillStyle = "rgba(255,255,255,.12)"; rr(x + w - 22, y + 12, 10, h - 24, 5); ctx.fill();
+    const ph = (h - 24) * WK.prog; ctx.fillStyle = WK.prog > 0.95 ? "#30d158" : "#0a84ff"; rr(x + w - 22, y + 12 + (h - 24) - ph, 10, Math.max(2, ph), 5); ctx.fill(); }
+  ctx.restore();
+}
+function workoutCard() {
+  const ex = EXI[opt.ex] || EXERCISES[0];
+  const sel = id => { opt.ex = id; saveOpt(); renderSubs(); };
+  const fav = id => { opt.exFavs = opt.exFavs.includes(id) ? opt.exFavs.filter(x => x !== id) : [...opt.exFavs, id]; saveOpt(); renderSubs(); };
+  const list = el("div", { class: "list" }, EXERCISES.map(e => el("div", { class: "item" + (e.id === ex.id ? " sel" : ""), "data-q": (e.name + " " + e.cat).toLowerCase(), onclick: () => sel(e.id) },
+    [el("span", { class: "st" + (opt.exFavs.includes(e.id) ? " fav" : ""), onclick: ev => { ev.stopPropagation(); fav(e.id); } }, opt.exFavs.includes(e.id) ? "★" : "☆"), e.name, el("small", {}, e.kind === "hold" ? e.cat + " · hold" : e.cat)])));
+  const search = el("input", { placeholder: `Search ${EXERCISES.length} exercises…`, oninput: e => { const q = e.target.value.toLowerCase(); for (const it of list.children) it.style.display = it.dataset.q.includes(q) ? "" : "none"; } });
+  return [
+    el("div", { style: "display:flex;align-items:baseline;gap:10px" }, [el("span", { class: "big-num", id: "wkCount" }, ex.kind === "hold" ? (WK.best[ex.id] || 0) + "s best" : String(WK.counts[ex.id] || 0)), el("span", {}, ex.name)]),
+    el("div", { class: "opts", style: "margin:6px 0" }, [chipT("↺ Reset", false, () => { if (ex.kind === "hold") { delete WK.best[ex.id]; store.set("holdBest", WK.best); } else { WK.counts[ex.id] = 0; store.set("reps", WK.counts); } }),
+      chipT("🔊 Count out loud", opt.repVoice, () => opt.repVoice = !opt.repVoice)]),
+    el("small", {}, "★ Favourites"),
+    el("div", { class: "opts", style: "margin:4px 0 8px" }, opt.exFavs.filter(id => EXI[id]).map(id => chipT(EXI[id].name, id === ex.id, () => opt.ex = id))),
+    search, list];
+}
+// =================== DISTANCE (iris-based, US units) ===================
+const FOV_DEG = 64;
+const focalPx = () => W() / (2 * Math.tan(FOV_DEG * Math.PI / 360));
+const distSm = []; let FD = [];
+function faceDistances() {
+  return (R.mesh?.faceLandmarks || []).map((lm, i) => {
+    const px = (a, b) => Math.hypot((lm[a].x - lm[b].x) * W(), (lm[a].y - lm[b].y) * H());
+    const iris = lm.length > 477 ? (Math.max(px(469, 471), px(470, 472)) + Math.max(px(474, 476), px(475, 477))) / 2 : 0;
+    const raw = (iris > 2 ? focalPx() * 0.0117 / iris : focalPx() * 0.14 / Math.max(1, px(234, 454))) * opt.distCal;
+    const prev = distSm[i], k = !prev ? 1 : Math.abs(raw - prev) / prev > 0.3 ? 0.06 : 0.18;     // ignore single-frame spikes
+    distSm[i] = prev ? prev + (raw - prev) * k : raw; return { m: distSm[i], lm };
+  });
+}
+function calibrateDistance(trueM) {
+  if (!FD.length) { setStatus("Turn on Distance and face the camera first."); return; }
+  opt.distCal = opt.distCal * trueM / FD[0].m; distSm.length = 0; saveOpt(); setStatus(`Distance calibrated to ${fmtLen(trueM)}.`);
+}
+function drawDistance() {
+  FD.forEach(({ m, lm }) => { let maxX = 0; for (const p of lm) maxX = Math.max(maxX, p.x);
+    X.distance = fmtLen(m); label(`📏 ${fmtLen(m)}`, maxX * W(), lm[152].y * H() + 26, "#64d2ff"); });
+  if (!FD.length) X.distance = "";
+}
+// =================== DEPTH MEASUREMENTS ===================
+const DM = { pts: [], scale: 0 };
+function depthAt(nx, ny) { const D = X.depthRaw; if (!D) return 0; let s = 0, n = 0;
+  const cx = Math.round(nx * (D.w - 1)), cy = Math.round(ny * (D.h - 1));
+  for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) if (x >= 0 && y >= 0 && x < D.w && y < D.h) { s += D.data[y * D.w + x]; n++; }
+  return n ? s / n : 0; }
+function metersAt(nx, ny) { const d = depthAt(nx, ny); return d > 0 && DM.scale ? DM.scale / d : 0; }
+function point3(nx, ny) { const z = metersAt(nx, ny), f = focalPx(); return { x: (nx * W() - W() / 2) * z / f, y: (ny * H() - H() / 2) * z / f, z }; }
+function calibrateDepth() {   // anchor the relative depth map to a real distance: your face (iris size)
+  const f = FD[0]; if (!f || !X.depthRaw) return; const p = f.lm[168], d = depthAt(p.x, p.y); if (!d) return;
+  const s = f.m * d; DM.scale = DM.scale ? DM.scale * 0.7 + s * 0.3 : s;
+}
+function drawDepthMeasure() {
+  if (!X.depthRaw) { panel(["📐 Depth warming up…"], 8, H() - 64, "#64d2ff"); return; }
+  calibrateDepth();
+  const toS = p => ({ x: (mirror ? 1 - p.x : p.x) * W(), y: p.y * H() });
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const c = metersAt(0.5, 0.5); ctx.strokeStyle = "rgba(255,255,255,.8)"; ctx.lineWidth = 1.5; const cx = W() / 2, cy = H() / 2;
+  ctx.beginPath(); ctx.arc(cx, cy, 7, 0, 7); ctx.moveTo(cx - 14, cy); ctx.lineTo(cx - 9, cy); ctx.moveTo(cx + 9, cy); ctx.lineTo(cx + 14, cy); ctx.stroke();
+  ctx.restore();
+  label(DM.scale ? `◎ ${fmtLen(c)}` : "◎ show your face to calibrate", mirror ? W() / 2 - 12 : W() / 2 + 80, H() / 2 - 12, "#ffffff");
+  if (opt.depthObjLabels && DM.scale) for (const it of tracks.objects.length ? tracks.objects.filter(t => t.hits >= 2) : (R.objects || []).map(d => ({ label: d.categories[0].categoryName, x: d.boundingBox.originX, y: d.boundingBox.originY, w: d.boundingBox.width, h: d.boundingBox.height }))) {
+    const m = metersAt((it.x + it.w / 2) / W(), (it.y + it.h / 2) / H()); if (m) label(`${it.label} · ${fmtLen(m)} away`, it.x + it.w, it.y + it.h - 4, "#64d2ff"); }
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  for (let i = 0; i < DM.pts.length; i++) { const s = toS(DM.pts[i]); ctx.fillStyle = "#ffd60a"; ctx.beginPath(); ctx.arc(s.x, s.y, 6, 0, 7); ctx.fill(); ctx.strokeStyle = "#000"; ctx.stroke(); }
+  if (DM.pts.length === 2) { const [a, b] = DM.pts, sa = toS(a), sb = toS(b), A3 = point3(a.x, a.y), B3 = point3(b.x, b.y);
+    ctx.strokeStyle = "#ffd60a"; ctx.lineWidth = 3; ctx.setLineDash([8, 6]); ctx.beginPath(); ctx.moveTo(sa.x, sa.y); ctx.lineTo(sb.x, sb.y); ctx.stroke(); ctx.setLineDash([]);
+    const len = A3.z && B3.z ? Math.hypot(A3.x - B3.x, A3.y - B3.y, A3.z - B3.z) : 0, t = len ? "≈ " + fmtLen(len) : "show your face to calibrate";
+    ctx.font = "700 16px -apple-system,sans-serif"; const tw = ctx.measureText(t).width, mx = (sa.x + sb.x) / 2, my = (sa.y + sb.y) / 2 - 14;
+    ctx.fillStyle = "rgba(0,0,0,.75)"; rr(mx - tw / 2 - 8, my - 16, tw + 16, 24, 8); ctx.fill(); ctx.fillStyle = "#ffd60a"; ctx.fillText(t, mx - tw / 2, my + 2); X.measure = t; }
+  ctx.restore();
+  panel([DM.pts.length < 2 ? `📐 Tap ${2 - DM.pts.length} point${DM.pts.length ? "" : "s"} to measure` : "📐 Tap again to start a new measurement"], leftX(), H() - 64, "#ffd60a");
+}
+// =================== CLAV-MAX (face geometry + frame) ===================
+const CL = {};
+const sm = (k, v) => (CL[k] = CL[k] == null ? v : CL[k] * 0.85 + v * 0.15);
+function drawClav() {
+  const lines = [], lm = R.mesh?.faceLandmarks?.[0];
+  if (opt.clavFace && lm) {
+    const P = i => ({ x: lm[i].x * W(), y: lm[i].y * H() }), a = P(133), b = P(362), roll = Math.atan2(b.y - a.y, b.x - a.x), c = mid(a, b), co = Math.cos(-roll), si = Math.sin(-roll);
+    const R0 = i => { const p = P(i), dx = p.x - c.x, dy = p.y - c.y; return { x: dx * co - dy * si, y: dx * si + dy * co }; };
+    const d = (i, j) => { const p = R0(i), q = R0(j); return Math.hypot(p.x - q.x, p.y - q.y); };
+    const tilt = (inner, outer) => { const p = R0(inner), q = R0(outer); return Math.atan2(p.y - q.y, Math.abs(q.x - p.x)) * 180 / Math.PI; };
+    const fw = d(234, 454);
+    const ct = sm("ct", (tilt(133, 33) + tilt(362, 263)) / 2);
+    const fwhr = sm("fwhr", fw / Math.max(1, R0(0).y - R0(168).y));
+    const t1 = R0(9).y - R0(10).y, t2 = R0(2).y - R0(9).y, t3 = R0(152).y - R0(2).y, tt = t1 + t2 + t3;
+    const th = [sm("t1", t1 / tt * 100), sm("t2", t2 / tt * 100), sm("t3", t3 / tt * 100)];
+    const has = lm.length > 477, ipd = has ? d(468, 473) : d(159, 386), pupY = has ? (R0(468).y + R0(473).y) / 2 : (R0(159).y + R0(386).y) / 2;
+    const mfr = sm("mfr", ipd / Math.max(1, R0(0).y - pupY));
+    const esr = sm("esr", d(133, 362) / ((d(33, 133) + d(362, 263)) / 2));
+    const jaw = sm("jaw", d(172, 397) / fw);
+    const x0 = (R0(168).x + R0(1).x + R0(152).x) / 3; let asym = 0;
+    const PAIRS = [[33, 263], [133, 362], [61, 291], [234, 454], [172, 397], [70, 300], [105, 334], [50, 280], [98, 327], [159, 386], [145, 374]];
+    for (const [l, r] of PAIRS) { const pl = R0(l), pr = R0(r); asym += Math.abs((x0 - pl.x) - (pr.x - x0)) + Math.abs(pl.y - pr.y); }
+    const sym = sm("sym", Math.max(0, Math.min(100, 100 - asym / PAIRS.length / fw * 400)));
+    lines.push([`Canthal tilt: ${ct >= 0 ? "+" : ""}${ct.toFixed(1)}°  (outer corners ${ct >= 0 ? "higher" : "lower"})`, "#64d2ff"],
+      [`Facial thirds: ${th.map(v => Math.round(v)).join(" / ")} %  (even ≈ 33 each)`, "#64d2ff"],
+      [`FWHR: ${fwhr.toFixed(2)}   Midface ratio: ${mfr.toFixed(2)}`, "#64d2ff"],
+      [`Eye spacing: ${esr.toFixed(2)} eye-widths  (rule of fifths ≈ 1.0)`, "#64d2ff"],
+      [`Jaw ÷ cheekbone width: ${jaw.toFixed(2)}   Symmetry: ${Math.round(sym)}%`, "#64d2ff"]);
+    X.clav = `canthal tilt ${ct.toFixed(1)}°, thirds ${th.map(v => Math.round(v)).join("/")}, FWHR ${fwhr.toFixed(2)}, symmetry ${Math.round(sym)}%`;
+    // overlay: canthal lines, thirds, midline
+    ctx.save(); ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(100,210,255,.9)";
+    for (const [i, o] of [[133, 33], [362, 263]]) { const p = P(i), q = P(o), ex = (q.x - p.x) * 0.5, ey = (q.y - p.y) * 0.5; ctx.beginPath(); ctx.moveTo(p.x - ex, p.y - ey); ctx.lineTo(q.x + ex, q.y + ey); ctx.stroke(); }
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = "rgba(255,214,10,.8)";
+    const half = fw * 0.65; for (const i of [10, 9, 2, 152]) { const p = P(i); ctx.beginPath(); ctx.moveTo(p.x - half * Math.cos(roll), p.y - half * Math.sin(roll)); ctx.lineTo(p.x + half * Math.cos(roll), p.y + half * Math.sin(roll)); ctx.stroke(); }
+    ctx.strokeStyle = "rgba(255,255,255,.4)"; const t = P(10), bt = P(152); ctx.beginPath(); ctx.moveTo(t.x, t.y); ctx.lineTo(bt.x, bt.y); ctx.stroke(); ctx.restore();
+  } else if (opt.clavFace) lines.push(["Face the camera straight on", "#8e8e93"]);
+  const pl = R.pose?.landmarks?.[0];
+  if (opt.clavBody && pl) {
+    const s1 = PX(pl, 11), s2 = PX(pl, 12), h1 = PX(pl, 23), h2 = PX(pl, 24), ratio = sm("shr", dpx(s1, s2) / Math.max(1, dpx(h1, h2)));
+    const tiltS = sm("st", Math.atan2(s2.y - s1.y, Math.abs(s2.x - s1.x)) * 180 / Math.PI);
+    lines.push([`Shoulder ÷ hip width: ${ratio.toFixed(2)}  (pose joints)`, "#ffd60a"], [`Shoulders level: ${Math.abs(tiltS).toFixed(1)}° tilt`, "#ffd60a"]);
+    ctx.save(); ctx.strokeStyle = "#ffd60a"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(s1.x, s1.y); ctx.lineTo(s2.x, s2.y); ctx.stroke();
+    ctx.strokeStyle = "rgba(255,214,10,.5)"; ctx.beginPath(); ctx.moveTo(h1.x, h1.y); ctx.lineTo(h2.x, h2.y); ctx.stroke(); ctx.restore();
+  }
+  lines.push(["Geometry only, not a rating · angle & light change it", "#8e8e93"]);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.font = "600 12px -apple-system,sans-serif";
+  const L = [["📐 CLAV-MAX ANALYSIS", "#fff"], ...lines], w = Math.max(...L.map(([t]) => ctx.measureText(t).width)) + 20, h = L.length * 18 + 12;
+  const cx0 = W() - w - 8, cy0 = active.has("people") || active.has("ar") ? H() - h - 8 : 30; ctx.fillStyle = "rgba(20,20,24,.78)"; rr(cx0, cy0, w, h, 12); ctx.fill(); L.forEach(([t, c], i) => { ctx.fillStyle = c; ctx.fillText(t, cx0 + 10, cy0 + 18 + i * 18); }); ctx.restore();
+}
+// =================== ASL FINGERSPELLING (beta: static letters) ===================
+const ASL = { word: "", cur: "", since: 0, added: 0 };
+function aslLetter(lm) {
+  const [T, I, M, Rg, P] = fingersUp(lm), d = (a, b) => Math.hypot(lm[a].x - lm[b].x, lm[a].y - lm[b].y), s = d(0, 9) || 0.1;
+  if (d(4, 8) / s < 0.3 && M && Rg && P) return "F";
+  if (d(4, 8) / s < 0.35 && d(4, 12) / s < 0.45 && !M && !Rg && !P) return "O";
+  if (I && M && Rg && P) return T ? " " : "B";
+  if (I && M && Rg && !P) return "W";
+  if (I && M && !Rg && !P) return d(8, 12) > d(5, 9) * 1.4 ? "V" : "U";
+  if (I && !M && !Rg && !P) return T ? "L" : (d(4, 12) / s < 0.45 ? "D" : "D");
+  if (!I && !M && !Rg && P) return T ? "Y" : "I";
+  if (!I && !M && !Rg && !P) return T ? "A" : "S";
+  return "";
+}
+function drawAsl(now) {
+  const h = handSmooth[0]; if (!h || !R.hands?.landmarks?.length) { panel(["🤟 Show one hand, palm to the camera"], 8, 64, "#64d2ff"); return; }
+  const L = aslLetter(h.cur);
+  if (L !== ASL.cur) { ASL.cur = L; ASL.since = now; }
+  const held = (now - ASL.since) / 900;
+  if (L && held >= 1 && now - ASL.added > 900) { ASL.word = (ASL.word + L).slice(-40); ASL.added = now; ASL.since = now + 300; clickSound(1200); const w = $("aslWord"); if (w) w.textContent = ASL.word || "…"; }
+  const p = h.cur[0]; ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const sx = (mirror ? 1 - p.x : p.x) * W(), sy = Math.max(70, h.cur[12].y * H() - 30);
+  ctx.font = "800 54px -apple-system,sans-serif"; ctx.fillStyle = "#fff"; ctx.shadowColor = "#0a84ff"; ctx.shadowBlur = 18; ctx.fillText(L === " " ? "␣" : L || "?", sx - 18, sy);
+  ctx.shadowBlur = 0; ctx.strokeStyle = "#0a84ff"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(sx + 2, sy - 18, 40, -1.57, -1.57 + Math.min(1, Math.max(0, held)) * 6.28); ctx.stroke(); ctx.restore();
+  panel([`🤟 ${ASL.word || "(hold a letter to type)"}`, "Letters: A B D F I L O S U V W Y · open hand = space"], 8, 64, "#64d2ff");
+  X.asl = ASL.word;
+}
+// =================== ROCK PAPER SCISSORS vs JARVIS ===================
+const RPS = { me: 0, ai: 0, st: "idle", t: 0, mine: "", his: "", res: "" };
+function drawRps(now) {
+  const hand = handSmooth[0] && R.hands?.landmarks?.length ? handSmooth[0] : null, g = hand?.g;
+  const pick = g === "Fist" ? "rock" : g === "Open hand" || g === "Four" ? "paper" : g === "Peace" ? "scissors" : "";
+  const E = { rock: "✊", paper: "✋", scissors: "✌️" };
+  if (RPS.st === "idle" && hand && now - RPS.t > 1500) { RPS.st = "count"; RPS.t = now; }
+  let big = "", sub = "";
+  if (RPS.st === "count") { const k = Math.floor((now - RPS.t) / 700); big = ["Rock…", "Paper…", "Scissors…", "SHOOT!"][Math.min(3, k)];
+    if (k >= 3 && now - RPS.t > 2400) { RPS.mine = pick; RPS.his = ["rock", "paper", "scissors"][Math.floor(Math.random() * 3)];
+      const beats = { rock: "scissors", paper: "rock", scissors: "paper" };
+      RPS.res = !pick ? "I couldn't read your hand" : pick === RPS.his ? "Draw" : beats[pick] === RPS.his ? "You win!" : "JARVIS wins";
+      if (RPS.res === "You win!") RPS.me++; if (RPS.res === "JARVIS wins") RPS.ai++;
+      say(pick ? `${RPS.his}. ${RPS.res === "You win!" ? "You win, sir." : RPS.res === "Draw" ? "A draw." : "I win."}` : "I couldn't see your hand.");
+      RPS.st = "result"; RPS.t = now; renderSubs(); } }
+  else if (RPS.st === "result") { big = `${E[RPS.mine] || "❔"} vs ${E[RPS.his]}`; sub = RPS.res; if (now - RPS.t > 2800) { RPS.st = "idle"; RPS.t = now; } }
+  else big = hand ? "Get ready…" : "Show your hand to play";
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.textAlign = "center"; ctx.font = "800 44px -apple-system,sans-serif"; ctx.fillStyle = "#fff"; ctx.shadowColor = "#000"; ctx.shadowBlur = 12;
+  ctx.fillText(big, W() / 2, H() * 0.3); if (sub) { ctx.font = "700 24px -apple-system,sans-serif"; ctx.fillStyle = RPS.res === "You win!" ? "#30d158" : "#ff9f0a"; ctx.fillText(sub, W() / 2, H() * 0.3 + 36); }
+  ctx.font = "600 15px -apple-system,sans-serif"; ctx.fillStyle = "#fff"; ctx.fillText(`You ${RPS.me} – ${RPS.ai} JARVIS`, W() / 2, 26); ctx.restore();
+}
+// =================== FACE-TOUCH ALERT ===================
+const FT = { n: 0, since: 0, last: 0, on: false };
+function drawFaceTouch(now) {
+  const f = R.mesh?.faceLandmarks?.[0], hs = R.hands?.landmarks || [];
+  let touching = false;
+  if (f) { let x0 = 1, y0 = 1, x1 = 0, y1 = 0; for (const p of f) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
+    const px = (x1 - x0) * 0.05; for (const h of hs) for (const t of [4, 8, 12, 16, 20]) if (h[t].x > x0 - px && h[t].x < x1 + px && h[t].y > y0 && h[t].y < y1 + px) touching = true; }
+  if (touching) { FT.since ||= now; if (now - FT.since > 400 && !FT.on) { FT.on = true; FT.n++; if (now - FT.last > 3000) { FT.last = now; beep(); } } } else { FT.since = 0; FT.on = false; }
+  if (FT.on) banner("✋ HANDS OFF YOUR FACE", "#ff453a");
+  panel([`🙅 Face touches: ${FT.n}`], 8, H() - 208, FT.on ? "#ff453a" : "#30d158"); X.facetouch = FT.n;
+}
+// =================== BLINK COUNTER ===================
+const BL = { n: 0, closed: false, t0: performance.now() };
+function drawBlink(now) {
+  const bs = R.mesh?.faceBlendshapes?.[0]?.categories; if (!bs) return;
+  const g = n => bs.find(c => c.categoryName === n)?.score || 0, v = (g("eyeBlinkLeft") + g("eyeBlinkRight")) / 2;
+  if (v > 0.5 && !BL.closed) BL.closed = true; else if (v < 0.3 && BL.closed) { BL.closed = false; BL.n++; }
+  const mins = Math.max(0.25, (now - BL.t0) / 60000), rate = Math.round(BL.n / mins);
+  panel([`👁 Blinks: ${BL.n}`, `${rate}/min ${mins < 1 ? "(warming up)" : rate < 8 ? "· low — remember to blink" : "· normal is ~15–20"}`], W() - 240, H() - 120, "#64d2ff");
+  X.blink = `${BL.n} blinks, ${rate}/min`;
+}
+// =================== SMILE SHUTTER ===================
+const SM = { since: 0, cd: 0, last: 0, n: 0 };
+function drawSmile(now) {
+  const bs = R.mesh?.faceBlendshapes?.[0]?.categories; if (!bs) { panel(["📸 Smile at the camera"], 8, 64, "#ffd60a"); return; }
+  const g = n => bs.find(c => c.categoryName === n)?.score || 0, s = (g("mouthSmileLeft") + g("mouthSmileRight")) / 2;
+  if (!SM.cd && now - SM.last > 5000) { if (s > 0.55) { SM.since ||= now; if (now - SM.since > 500) SM.cd = now; } else SM.since = 0; }
+  if (SM.cd) { const k = 3 - Math.floor((now - SM.cd) / 800);
+    if (k <= 0) { $("snap").click(); SM.n++; SM.cd = 0; SM.since = 0; SM.last = now; clickSound(500); }
+    else { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.font = "800 120px -apple-system,sans-serif"; ctx.textAlign = "center"; ctx.fillStyle = "rgba(255,255,255,.9)"; ctx.fillText(String(k), W() / 2, H() / 2 + 40); ctx.restore(); } }
+  if (now - SM.last < 250) { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = `rgba(255,255,255,${1 - (now - SM.last) / 250})`; ctx.fillRect(0, 0, W(), H()); ctx.restore(); }
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "rgba(20,20,24,.7)"; rr(8, 64, 180, 44, 10); ctx.fill(); ctx.fillStyle = "#fff"; ctx.font = "600 12px -apple-system,sans-serif"; ctx.fillText(`📸 Smile to snap · ${SM.n} taken`, 16, 80);
+  ctx.fillStyle = "rgba(255,255,255,.15)"; rr(16, 88, 164, 10, 5); ctx.fill(); ctx.fillStyle = s > 0.55 ? "#30d158" : "#ffd60a"; rr(16, 88, 164 * Math.min(1, s / 0.55), 10, 5); ctx.fill(); ctx.restore();
+}
+// =================== LASER EYES ===================
+function drawLaser(now) {
+  for (const lm of R.mesh?.faceLandmarks || []) {
+    const P = i => ({ x: lm[i].x * W(), y: lm[i].y * H() }), has = lm.length > 477, eyes = has ? [P(468), P(473)] : [P(159), P(386)];
+    const l = P(234), r = P(454), nose = P(1), top = P(10), chin = P(152), fw = dpx(l, r);
+    const yaw = (nose.x - (l.x + r.x) / 2) / Math.max(1, Math.abs(r.x - l.x)), pitch = (nose.y - (top.y + chin.y) / 2) / Math.max(1, Math.abs(chin.y - top.y));
+    let dx = yaw * 3.2, dy = 0.25 + pitch * 3; const n = Math.hypot(dx, dy) || 1; dx /= n; dy /= n;
+    ctx.save(); ctx.globalCompositeOperation = "lighter"; ctx.lineCap = "round";
+    for (const e of eyes) { const ex = e.x + dx * W() * 1.5, ey = e.y + dy * W() * 1.5, flick = 0.8 + Math.random() * 0.4;
+      for (const [wd, a] of [[fw * 0.22, 0.18], [fw * 0.1, 0.45], [fw * 0.035, 1]]) { ctx.strokeStyle = a === 1 ? "#fff" : opt.laserColor; ctx.globalAlpha = a; ctx.lineWidth = wd * flick; ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(ex, ey); ctx.stroke(); }
+      const g = ctx.createRadialGradient(e.x, e.y, 0, e.x, e.y, fw * 0.18); g.addColorStop(0, "#fff"); g.addColorStop(0.4, opt.laserColor); g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.globalAlpha = 1; ctx.fillStyle = g; ctx.beginPath(); ctx.arc(e.x, e.y, fw * 0.18, 0, 7); ctx.fill(); }
+    ctx.restore();
+  }
+}
+// =================== AR FACE MASKS ===================
+const MASKS = [["shades", "🕶 Shades"], ["crown", "👑 Crown"], ["mustache", "🥸 Mustache"], ["clown", "🤡 Clown nose"], ["halo", "😇 Halo"], ["horns", "😈 Horns"], ["cat", "🐱 Cat"]];
+function drawMasks() {
+  for (const lm of R.mesh?.faceLandmarks || []) {
+    const P = i => ({ x: lm[i].x * W(), y: lm[i].y * H() }), le = P(33), re = P(263), roll = Math.atan2(re.y - le.y, re.x - le.x), fw = dpx(P(234), P(454)), up = { x: Math.sin(roll), y: -Math.cos(roll) };
+    ctx.save();
+    const at = (p, fn) => { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(roll); fn(); ctx.restore(); };
+    const m = opt.mask, top = P(10);
+    if (m === "shades") at(mid(P(33), P(263)), () => { const w = fw * 0.27, h = fw * 0.17, gx = fw * 0.2;
+      ctx.fillStyle = "rgba(10,10,14,.92)"; for (const s of [-1, 1]) { rr(s * gx - w / 2, -h / 2, w, h, h * 0.45); ctx.fill(); }
+      ctx.fillRect(-gx + w / 2 - 2, -h * 0.35, (gx - w / 2) * 2 + 4, h * 0.12); ctx.fillRect(-gx - w / 2 - fw * 0.06, -h * 0.4, fw * 0.06, h * 0.1); ctx.fillRect(gx + w / 2, -h * 0.4, fw * 0.06, h * 0.1);
+      ctx.fillStyle = "rgba(255,255,255,.25)"; for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(s * gx - w * 0.18, -h * 0.15, w * 0.18, h * 0.12, -0.5, 0, 7); ctx.fill(); } });
+    if (m === "crown") at({ x: top.x + up.x * fw * 0.32, y: top.y + up.y * fw * 0.32 }, () => { const w = fw * 0.85, h = fw * 0.4;
+      const g = ctx.createLinearGradient(0, -h, 0, h * 0.3); g.addColorStop(0, "#fff3a0"); g.addColorStop(1, "#d4a017"); ctx.fillStyle = g;
+      ctx.beginPath(); ctx.moveTo(-w / 2, h * 0.3); [-0.5, -0.33, -0.17, 0, 0.17, 0.33, 0.5].forEach((t, i) => ctx.lineTo(t * w, i % 2 ? -h * 0.15 : -h * 0.65)); ctx.lineTo(w / 2, h * 0.3); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#ff2d55"; for (const t of [-0.33, 0, 0.33]) { ctx.beginPath(); ctx.arc(t * w, h * 0.05, h * 0.09, 0, 7); ctx.fill(); } });
+    if (m === "mustache") at(mid(P(2), P(0)), () => { const w = fw * 0.3; ctx.fillStyle = "#2b1a10";
+      for (const s of [-1, 1]) { ctx.beginPath(); ctx.moveTo(0, -w * 0.05); ctx.bezierCurveTo(s * w * 0.3, -w * 0.25, s * w * 0.9, -w * 0.05, s * w, -w * 0.35); ctx.bezierCurveTo(s * w * 0.8, w * 0.2, s * w * 0.3, w * 0.12, 0, w * 0.1); ctx.fill(); } });
+    if (m === "clown") { const n = P(1); ctx.fillStyle = "#ff1f1f"; ctx.shadowColor = "#ff1f1f"; ctx.shadowBlur = 12; ctx.beginPath(); ctx.arc(n.x, n.y, fw * 0.09, 0, 7); ctx.fill();
+      ctx.shadowBlur = 0; ctx.fillStyle = "rgba(255,255,255,.6)"; ctx.beginPath(); ctx.arc(n.x - fw * 0.03, n.y - fw * 0.03, fw * 0.025, 0, 7); ctx.fill(); }
+    if (m === "halo") at({ x: top.x + up.x * fw * 0.45, y: top.y + up.y * fw * 0.45 }, () => { ctx.strokeStyle = "#ffe066"; ctx.lineWidth = fw * 0.05; ctx.shadowColor = "#fff2a8"; ctx.shadowBlur = 25; ctx.beginPath(); ctx.ellipse(0, 0, fw * 0.42, fw * 0.11, 0, 0, 7); ctx.stroke(); });
+    if (m === "horns") for (const s of [-1, 1]) at({ x: top.x + Math.cos(roll) * s * fw * 0.28 + up.x * fw * 0.05, y: top.y + Math.sin(roll) * s * fw * 0.28 + up.y * fw * 0.05 }, () => {
+      ctx.fillStyle = "#d10000"; ctx.beginPath(); ctx.moveTo(-fw * 0.08, 0); ctx.quadraticCurveTo(s * fw * 0.02, -fw * 0.2, s * fw * 0.12, -fw * 0.32); ctx.quadraticCurveTo(s * fw * 0.06, -fw * 0.12, fw * 0.08, 0); ctx.closePath(); ctx.fill(); });
+    if (m === "cat") { for (const s of [-1, 1]) at({ x: top.x + Math.cos(roll) * s * fw * 0.32 + up.x * fw * 0.08, y: top.y + Math.sin(roll) * s * fw * 0.32 + up.y * fw * 0.08 }, () => {
+        ctx.fillStyle = "#3a3a3c"; ctx.beginPath(); ctx.moveTo(-fw * 0.13, 0); ctx.lineTo(s * fw * 0.04, -fw * 0.3); ctx.lineTo(fw * 0.13, 0); ctx.fill();
+        ctx.fillStyle = "#ff9fb2"; ctx.beginPath(); ctx.moveTo(-fw * 0.07, -fw * 0.02); ctx.lineTo(s * fw * 0.03, -fw * 0.2); ctx.lineTo(fw * 0.07, -fw * 0.02); ctx.fill(); });
+      at(P(1), () => { ctx.fillStyle = "#ff9fb2"; ctx.beginPath(); ctx.moveTo(-fw * 0.04, -fw * 0.02); ctx.lineTo(fw * 0.04, -fw * 0.02); ctx.lineTo(0, fw * 0.03); ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,.85)"; ctx.lineWidth = 1.5; for (const s of [-1, 1]) for (const k of [-1, 0, 1]) { ctx.beginPath(); ctx.moveTo(s * fw * 0.08, fw * 0.04); ctx.lineTo(s * fw * 0.36, fw * 0.04 + k * fw * 0.07); ctx.stroke(); } }); }
+    ctx.restore();
+  }
+}
+// =================== MOTION TRAILS ===================
+const trailC = document.createElement("canvas"), tctx = trailC.getContext("2d");
+function drawTrails() {
+  const fresh = trailC.width !== W() || trailC.height !== H(); if (fresh) { trailC.width = W(); trailC.height = H(); }
+  tctx.globalAlpha = fresh ? 1 : 1 - opt.trailLen; tctx.drawImage(out, 0, 0); tctx.globalAlpha = 1;
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(trailC, 0, 0); ctx.restore();
+}
+// =================== OBJECT COUNTER (any class) ===================
+let counterMax = {};
+function drawCounter() {
+  const cls = opt.counterClass, n = (R.objects || []).filter(d => (cls === "anything" || d.categories[0].categoryName === cls) && d.categories[0].score > 0.45).length;
+  counterMax[cls] = Math.max(counterMax[cls] || 0, n); X.people = `${n} ${cls === "anything" ? "objects" : cls + (n === 1 ? "" : "s")}`;
+  panel([`🔢 ${cls === "anything" ? "Objects" : cls}: ${n}`, `Most at once: ${counterMax[cls]}`], W() - 190, 30, "#64d2ff");
+}
+// =================== 3D HOLOGRAM: grab, spin and scale a 3D model with your hands ===================
+// 🤏 pinch near it + move = rotate · ✊ fist near it = grab & move · two-hand pinch = scale + twist · ✋ swipe = spin
+// Mouse: drag = rotate, shift-drag = move, scroll = zoom. Touch: drag = rotate.
+function lathe(profile, seg, part) {         // profile: [[radius, y], ...] spun around the Y axis
+  const v = [], f = [];
+  profile.forEach(([r, y]) => { for (let i = 0; i < seg; i++) { const a = i / seg * Math.PI * 2; v.push([Math.cos(a) * r, y, Math.sin(a) * r]); } });
+  for (let j = 0; j < profile.length - 1; j++) for (let i = 0; i < seg; i++) { const a = j * seg + i, b = j * seg + (i + 1) % seg, c = a + seg, d = b + seg; f.push([a, c, b, part], [b, c, d, part]); }
+  return { v, f };
+}
+function boxMesh(cx, cy, cz, sx, sy, sz, part) {
+  const v = []; for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) v.push([cx + x * sx, cy + y * sy, cz + z * sz]);
+  const q = [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]], f = [];
+  for (const [a, b, c, d] of q) f.push([a, b, c, part], [a, c, d, part]); return { v, f };
+}
+function merge(...ms) { const v = [], f = []; for (const m of ms) { const o = v.length; v.push(...m.v); for (const t of m.f) f.push([t[0] + o, t[1] + o, t[2] + o, t[3]]); } return { v, f }; }
+const HOLO_MODELS = {
+  rocket: () => merge(
+    lathe([[0.001, 1.55], [0.12, 1.3], [0.22, 1.0], [0.25, 0.7]], 20, 0),                       // nose cone
+    lathe([[0.25, 0.7], [0.25, -0.6]], 20, 1),                                                   // body
+    lathe([[0.25, -0.6], [0.2, -0.7], [0.12, -0.75], [0.16, -0.95], [0.24, -1.15]], 20, 3),      // engine bell
+    boxMesh(0.33, -0.45, 0, 0.1, 0.18, 0.015, 2), boxMesh(-0.33, -0.45, 0, 0.1, 0.18, 0.015, 2), boxMesh(0, -0.45, 0.33, 0.015, 0.18, 0.1, 2), boxMesh(0, -0.45, -0.33, 0.015, 0.18, 0.1, 2)),
+  engine: () => merge(
+    lathe([[0.18, 0.9], [0.22, 0.75], [0.22, 0.55]], 24, 0),                                      // turbopump dome
+    lathe([[0.22, 0.55], [0.14, 0.35], [0.11, 0.2]], 24, 1),                                      // throat
+    lathe([[0.11, 0.2], [0.2, 0.0], [0.32, -0.3], [0.45, -0.7], [0.55, -1.1]], 28, 3),            // nozzle bell
+    boxMesh(0.26, 0.6, 0, 0.05, 0.12, 0.05, 2), boxMesh(-0.26, 0.6, 0, 0.05, 0.12, 0.05, 2)),
+  cube: () => boxMesh(0, 0, 0, 0.6, 0.6, 0.6, 1),
+  torus: () => { const v = [], f = [], S = 28, T = 14; for (let i = 0; i < S; i++) for (let j = 0; j < T; j++) { const a = i / S * 6.283, b = j / T * 6.283, r = 0.6 + 0.22 * Math.cos(b); v.push([Math.cos(a) * r, 0.22 * Math.sin(b), Math.sin(a) * r]); }
+    for (let i = 0; i < S; i++) for (let j = 0; j < T; j++) { const a = i * T + j, b = ((i + 1) % S) * T + j, c = i * T + (j + 1) % T, d = ((i + 1) % S) * T + (j + 1) % T; f.push([a, b, c, i % 4 ? 1 : 3], [b, d, c, i % 4 ? 1 : 3]); } return { v, f }; },
+  planet: () => { const P = []; for (let i = 0; i <= 14; i++) { const t = i / 14 * Math.PI; P.push([Math.sin(t) * 0.75 + 0.0001, Math.cos(t) * 0.75]); } const m = lathe(P, 28, 1);
+    m.f.forEach((t, i) => { const y = m.v[t[0]][1]; t[3] = Math.sin(i * 0.37) + Math.sin(y * 9) > 0.6 ? 2 : 1; }); return merge(m, lathe([[0.95, 0.001], [1.35, -0.001]], 40, 3)); },
+};
+const PART_COL = [[230, 236, 245], [200, 210, 225], [60, 60, 70], [255, 140, 60]];
+const HO = { model: null, name: "", rx: -0.35, ry: 0.6, rz: 0, x: 0.62, y: 0.5, s: 0.32, vx: 0, vy: 0, mode: "", grab: null, two: null, pinch: [false, false], lastPalm: null, explode: 0 };
+function holoLoad(name) { HO.model = HOLO_MODELS[name](); HO.name = name; }
+function holoProject(now) {
+  const m = HO.model, cs = (a) => [Math.cos(a), Math.sin(a)], [cx, sx] = cs(HO.rx), [cy, sy] = cs(HO.ry), [cz, sz] = cs(HO.rz);
+  const size = Math.min(W(), H()) * HO.s, ox = HO.x * W(), oy = HO.y * H(), ex = HO.explode;
+  const P = m.v.map(([x, y, z], i) => {
+    let X1 = x * cz - y * sz, Y1 = x * sz + y * cz; let Y2 = Y1 * cx - z * sx, Z2 = Y1 * sx + z * cx; let X3 = X1 * cy + Z2 * sy, Z3 = -X1 * sy + Z2 * cy;
+    const persp = 3 / (3 + Z3); return { x: ox + X3 * size * persp, y: oy - Y2 * size * persp, z: Z3, w: [X3, Y2, Z3] }; });
+  return P;
+}
+function drawHolo(now) {
+  if (!HO.model || HO.name !== opt.holoModel) holoLoad(opt.holoModel);
+  // ---- hand control ----
+  const hands = R.hands?.landmarks?.length ? handSmooth.slice(0, 2) : [];
+  const info = hands.map((h, i) => { const p = h.cur, sz = Math.hypot(p[0].x - p[9].x, p[0].y - p[9].y) || 0.1, d = Math.hypot(p[4].x - p[8].x, p[4].y - p[8].y) / sz;
+    HO.pinch[i] = HO.pinch[i] ? d < 0.5 : d < 0.33;
+    const pt = HO.pinch[i] ? { x: (p[4].x + p[8].x) / 2, y: (p[4].y + p[8].y) / 2 } : p[9];
+    return { pinch: HO.pinch[i], fist: h.g === "Fist", open: h.g === "Open hand", x: mirror ? 1 - pt.x : pt.x, y: pt.y, size: sz }; });
+  const near = q => Math.hypot((q.x - HO.x) * W(), (q.y - HO.y) * H()) < Math.min(W(), H()) * HO.s * 1.6;
+  const pin = info.filter(q => q.pinch);
+  if (pin.length === 2) {                                         // two hands: scale + twist
+    const [a, b] = pin, dist = Math.hypot((a.x - b.x) * W(), (a.y - b.y) * H()), ang = Math.atan2(b.y - a.y, b.x - a.x);
+    if (!HO.two) HO.two = { dist, ang, s: HO.s, rz: HO.rz };
+    HO.s = Math.max(0.08, Math.min(1.5, HO.two.s * dist / HO.two.dist)); HO.rz = HO.two.rz - (ang - HO.two.ang); HO.mode = "SCALE + TWIST"; HO.grab = null;
+  } else {
+    HO.two = null;
+    const q = info[0];
+    if (q && (q.pinch || q.fist)) {
+      if (!HO.grab && near(q)) HO.grab = { x: q.x, y: q.y, kind: q.fist ? "move" : "rotate", size: q.size, s: HO.s };
+      if (HO.grab) { const dx = q.x - HO.grab.x, dy = q.y - HO.grab.y;
+        if (HO.grab.kind === "move") { HO.x += dx; HO.y += dy; HO.s = Math.max(0.08, Math.min(1.5, HO.grab.s * q.size / HO.grab.size)); HO.mode = "GRAB & MOVE (push/pull to resize)"; }
+        else { HO.ry += dx * 7; HO.rx += dy * 7; HO.vx = dy * 7; HO.vy = dx * 7; HO.mode = "ROTATE"; }
+        HO.grab.x = q.x; HO.grab.y = q.y; }
+    } else { HO.grab = null; HO.mode = "";
+      if (q && q.open && HO.lastPalm && near(q)) { const vx = q.x - HO.lastPalm.x; if (Math.abs(vx) > 0.02) { HO.vy += vx * 6; HO.mode = "SPIN!"; } } }
+    HO.lastPalm = q ? { x: q.x, y: q.y } : null;
+  }
+  if (!HO.grab && !HO.two) { HO.ry += HO.vy * 0.15; HO.rx += HO.vx * 0.15; HO.vy *= 0.95; HO.vx *= 0.95; if (Math.abs(HO.vy) < 0.002 && !hands.length) HO.ry += 0.004; }
+  HO.x = Math.max(0.05, Math.min(0.95, HO.x)); HO.y = Math.max(0.08, Math.min(0.95, HO.y));
+  // ---- render (screen space, not mirrored) ----
+  const P = holoProject(now), m = HO.model, L = [0.4, 0.6, -0.7], ln = Math.hypot(...L), tint = opt.holoColor;
+  const tris = m.f.map(t => { const a = P[t[0]], b = P[t[1]], c = P[t[2]];
+    const u = [b.w[0] - a.w[0], b.w[1] - a.w[1], b.w[2] - a.w[2]], v = [c.w[0] - a.w[0], c.w[1] - a.w[1], c.w[2] - a.w[2]];
+    const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]], nl = Math.hypot(...n) || 1;
+    const lit = Math.abs((n[0] * L[0] + n[1] * L[1] + n[2] * L[2]) / nl / ln);
+    return { a, b, c, z: (a.z + b.z + c.z) / 3, lit, part: t[3] }; }).sort((p, q) => q.z - p.z);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.lineJoin = "round";
+  // floor glow + grab ring
+  const R0 = Math.min(W(), H()) * HO.s; ctx.globalAlpha = 0.5; const g = ctx.createRadialGradient(HO.x * W(), HO.y * H() + R0 * 1.25, 0, HO.x * W(), HO.y * H() + R0 * 1.25, R0);
+  g.addColorStop(0, tint); g.addColorStop(1, "rgba(0,0,0,0)"); ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(HO.x * W(), HO.y * H() + R0 * 1.25, R0, R0 * 0.22, 0, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+  for (const t of tris) {
+    const [r, gg, b] = opt.holoSolid ? PART_COL[t.part] : [120, 220, 255], k = 0.35 + 0.65 * t.lit;
+    ctx.beginPath(); ctx.moveTo(t.a.x, t.a.y); ctx.lineTo(t.b.x, t.b.y); ctx.lineTo(t.c.x, t.c.y); ctx.closePath();
+    if (opt.holoSolid) { ctx.fillStyle = `rgba(${r * k | 0},${gg * k | 0},${b * k | 0},0.96)`; ctx.fill(); ctx.strokeStyle = `rgba(${r * k | 0},${gg * k | 0},${b * k | 0},0.96)`; ctx.lineWidth = 0.6; ctx.stroke(); }
+    else { ctx.fillStyle = `rgba(40,160,255,${0.05 + 0.12 * t.lit})`; ctx.fill(); ctx.strokeStyle = tint; ctx.globalAlpha = 0.25 + 0.5 * t.lit; ctx.lineWidth = 1; ctx.stroke(); ctx.globalAlpha = 1; }
+  }
+  if (!opt.holoSolid) { ctx.globalCompositeOperation = "lighter"; ctx.globalAlpha = 0.08 + 0.04 * Math.sin(now / 90); ctx.fillStyle = tint; for (let y = 0; y < H(); y += 4) ctx.fillRect(HO.x * W() - R0 * 1.6, y, R0 * 3.2, 1); ctx.globalAlpha = 1; ctx.globalCompositeOperation = "source-over"; }
+  if (HO.grab || HO.two) { ctx.strokeStyle = "#ffd60a"; ctx.lineWidth = 2; ctx.setLineDash([6, 6]); ctx.lineDashOffset = -now / 30; ctx.beginPath(); ctx.arc(HO.x * W(), HO.y * H(), R0 * 1.35, 0, 7); ctx.stroke(); ctx.setLineDash([]); }
+  for (const q of info) { ctx.fillStyle = q.pinch ? "#ffd60a" : q.fist ? "#ff9f0a" : "rgba(255,255,255,.5)"; ctx.beginPath(); ctx.arc(q.x * W(), q.y * H(), q.pinch || q.fist ? 9 : 6, 0, 7); ctx.fill(); }
+  ctx.font = "600 12px -apple-system,sans-serif"; ctx.fillStyle = "rgba(20,20,24,.72)"; const msg = HO.mode ? "✋ " + HO.mode : "🤏 pinch near it to rotate · ✊ fist to grab · 2 hands to scale · ✋ swipe to spin";
+  const tw = ctx.measureText(msg).width; rr(W() / 2 - tw / 2 - 10, 8, tw + 20, 24, 12); ctx.fill(); ctx.fillStyle = HO.mode ? "#ffd60a" : "#fff"; ctx.fillText(msg, W() / 2 - tw / 2, 24);
+  ctx.restore();
+  X.holo = `${HO.name} hologram, scale ${HO.s.toFixed(2)}`;
+}
+// mouse / touch control for the hologram
+(() => { let drag = null; const pt = e => { const r = out.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height }; };
+  out.addEventListener("pointerdown", e => { if (!active.has("holo") || active.has("draw")) return; const p = pt(e);
+    if (Math.hypot((p.x - HO.x) * W(), (p.y - HO.y) * H()) > Math.min(W(), H()) * HO.s * 1.8) return;
+    drag = { ...p, move: e.shiftKey }; try { out.setPointerCapture(e.pointerId); } catch {} e.preventDefault(); });
+  out.addEventListener("pointermove", e => { if (!drag) return; const p = pt(e), dx = p.x - drag.x, dy = p.y - drag.y;
+    if (drag.move) { HO.x += dx; HO.y += dy; } else { HO.ry += dx * 7; HO.rx += dy * 7; HO.vy = dx * 7; HO.vx = dy * 7; } drag.x = p.x; drag.y = p.y; });
+  for (const ev of ["pointerup", "pointercancel"]) out.addEventListener(ev, () => drag = null);
+  out.addEventListener("wheel", e => { if (!active.has("holo")) return; e.preventDefault(); HO.s = Math.max(0.08, Math.min(1.5, HO.s * (e.deltaY > 0 ? 0.92 : 1.08))); }, { passive: false });
+})();
 function drawMore(now) {
+  if (active.has("trails")) drawTrails();
+  FD = (active.has("distance") || active.has("depth")) && R.mesh ? faceDistances() : [];
+  if (active.has("masks")) drawMasks();
+  if (active.has("laser")) drawLaser(now);
   if (active.has("blur")) drawFaceBlur();
   if (active.has("hud")) drawHud(now);
   if (active.has("fingers")) drawFingers();
   if (active.has("posture")) drawPosture(now); else postureT0 = 0;
   if (active.has("distance")) drawDistance();
   if (active.has("color")) drawColor();
-  if (active.has("people")) drawPeople();
+  if (active.has("people")) drawCounter();
+  if (active.has("depth")) drawDepthMeasure();
+  if (active.has("clavmax")) drawClav();
+  if (active.has("asl")) drawAsl(now);
+  if (active.has("rps")) drawRps(now); else if (RPS.st !== "idle") RPS.st = "idle";
+  if (active.has("facetouch")) drawFaceTouch(now);
+  if (active.has("blink")) drawBlink(now);
+  if (active.has("smile")) drawSmile(now);
+  if (active.has("holo")) drawHolo(now);
   if (active.has("intruder")) drawIntruder(now); else intruderArmed = 0;
   if (active.has("pulse")) drawPulse(now); else ppg.length = 0;
-  if (active.has("ghost")) drawGhost(now); else gPrev = null;
+  if (active.has("ghost")) drawGhost(now); else if (GH.noise) ghostRecalibrate();
   if (active.has("thoughts")) drawThoughts(now);
   if (active.has("ar")) drawAR(now);
-  const ta = active.has("draw") || active.has("ar") ? "none" : ""; if (out.style.touchAction !== ta) out.style.touchAction = ta;
+  const ta = ["draw", "ar", "holo", "depth"].some(k => active.has(k)) ? "none" : ""; if (out.style.touchAction !== ta) out.style.touchAction = ta;
 }
+// tap two points to measure (depth mode)
+out.addEventListener("pointerdown", e => {
+  if (!active.has("depth") || active.has("draw")) return;
+  const r = out.getBoundingClientRect(), sx = (e.clientX - r.left) * out.width / r.width, sy = (e.clientY - r.top) * out.height / r.height;
+  if (active.has("ar") && arButtons.some(b => sx >= b.x && sx <= b.x + b.w && sy >= b.y && sy <= b.y + b.h)) return;
+  if (active.has("holo") && Math.hypot(sx / W() - HO.x, sy / H() - HO.y) * Math.max(W(), H()) < Math.min(W(), H()) * HO.s * 1.8) return;
+  const p = { x: mirror ? 1 - sx / out.width : sx / out.width, y: sy / out.height };
+  DM.pts = DM.pts.length >= 2 ? [p] : [...DM.pts, p]; clickSound(1500);
+});
+// resize the JARVIS widget by dragging its corner
+(() => { const grip = $("orbgrip"); let st = null;
+  const setSize = px => { px = Math.max(80, Math.min(360, px)); orb.style.setProperty("--orb", px + "px"); const res = Math.min(512, Math.round(px * (devicePixelRatio || 1))); if (oc.width !== res) { oc.width = oc.height = res; } return px; };
+  setSize(store.get("orbSize", 140));
+  grip.addEventListener("pointerdown", e => { e.stopPropagation(); e.preventDefault(); st = { x: e.clientX, y: e.clientY, s: parseFloat(getComputedStyle(orb).getPropertyValue("--orb")) || 140 }; grip.setPointerCapture(e.pointerId); });
+  grip.addEventListener("pointermove", e => { if (!st) return; e.stopPropagation(); setSize(st.s + Math.max(e.clientX - st.x, e.clientY - st.y)); });
+  const end = e => { if (!st) return; e.stopPropagation(); store.set("orbSize", setSize(parseFloat(getComputedStyle(orb).getPropertyValue("--orb")))); st = null; };
+  grip.addEventListener("pointerup", end); grip.addEventListener("pointercancel", end);
+  orb.addEventListener("wheel", e => { if (!e.ctrlKey && !e.altKey) return; e.preventDefault(); store.set("orbSize", setSize((parseFloat(getComputedStyle(orb).getPropertyValue("--orb")) || 140) * (e.deltaY > 0 ? 0.92 : 1.08))); }, { passive: false });
+})();
 // ---------- main loop ----------
 // The video is drawn every frame (smooth). The AI models run one at a time, taking turns,
 // only as often as this computer can keep up, and pause while the on-device brain is thinking.
@@ -1208,12 +1977,12 @@ const NICE = { Closed_Fist: "Fist", Open_Palm: "Open hand", Pointing_Up: "Pointi
 function runOneModel(t) {
   const jobs = [];
   const any = (...k) => k.some(x => active.has(x));
-  if (any("objects", "intruder", "people", "hud", "thoughts", "ghost") && models.objects) jobs.push("objects");
-  if (any("faces", "distance", "blur") && models.faces) jobs.push("faces");
-  if (any("hands", "objects", "draw", "fingers", "ar", "thoughts") && models.hands) jobs.push("hands");
-  if (any("pose", "workout", "posture") && models.pose) jobs.push("pose");
+  if (any("objects", "intruder", "people", "hud", "thoughts", "ghost", "depth") && models.objects) jobs.push("objects");
+  if (any("faces", "blur") && models.faces) jobs.push("faces");
+  if (any("hands", "objects", "draw", "fingers", "ar", "thoughts", "asl", "rps", "facetouch", "holo") && models.hands) jobs.push("hands");
+  if ((any("pose", "workout", "posture") || (active.has("clavmax") && opt.clavBody)) && models.pose) jobs.push("pose");
   if (active.has("seg") && models.seg) jobs.push("seg");
-  if ((active.has("mesh") || active.has("expr") || active.has("gaze") || active.has("pulse")) && models.mesh) jobs.push("mesh");
+  if (any("mesh", "expr", "gaze", "pulse", "distance", "clavmax", "facetouch", "blink", "smile", "laser", "masks", "depth") && models.mesh) jobs.push("mesh");
   if (!jobs.length) return false;
   const job = jobs[turn++ % jobs.length];
   if (job === "objects") R.objects = models.objects.detectForVideo(video, t).detections;
@@ -1287,7 +2056,7 @@ function drawResults() {
   const now = performance.now();
   if (active.has("objects")) {
     if (R.objects !== lastObjRes) { lastObjRes = R.objects;
-      track(tracks.objects, R.objects.map(d => ({ label: d.categories[0].categoryName, score: d.categories[0].score, x: d.boundingBox.originX, y: d.boundingBox.originY, w: d.boundingBox.width, h: d.boundingBox.height })), now); }
+      track(tracks.objects, R.objects.filter(d => objAllowed(d.categories[0].categoryName, d.categories[0].score)).map(d => ({ label: d.categories[0].categoryName, score: d.categories[0].score, x: d.boundingBox.originX, y: d.boundingBox.originY, w: d.boundingBox.width, h: d.boundingBox.height })), now); }
     for (const it of tracks.objects) it.text = `${it.label} ${Math.round(it.score * 100)}%`;
     seen.objects = tracks.objects.filter(t => now - t.seen < 400 && t.hits >= 2).map(t => t.label);
     drawTracks(tracks.objects, now, () => "#ffb000");
@@ -1301,7 +2070,7 @@ function drawResults() {
       if (!["Unknown", "Face"].includes(name) && Date.now() - (greeted[name] || 0) > 120000) { greeted[name] = Date.now(); say(`Hello, ${name}`); } }
     drawTracks(tracks.faces, now, it => it.text === "Unknown" ? "#ff8c42" : "#3ddc84");
   } else tracks.faces = [];
-  if ((active.has("hands") || active.has("draw") || active.has("fingers") || active.has("ar") || active.has("thoughts")) && R.hands) {
+  if (["hands", "draw", "fingers", "ar", "thoughts", "asl", "rps", "facetouch", "holo"].some(k => active.has(k)) && R.hands) {
     const r = R.hands; seen.gestures = []; const showHands = active.has("hands");
     if (r !== lastHandRes) { lastHandRes = r;
       handSmooth = r.landmarks.map((lm, i) => { const prev = handSmooth[i], side = r.handedness[i]?.[0]?.categoryName || "Hand";
@@ -1315,11 +2084,11 @@ function drawResults() {
       h.cur = h.cur.map((p, j) => ({ x: p.x + (h.target[j].x - p.x) * 0.35, y: p.y + (h.target[j].y - p.y) * 0.35, z: h.target[j].z }));
       seen.gestures.push(h.g);
       if (!showHands) continue;
-      draw.drawConnectors(h.cur, GestureRecognizer.HAND_CONNECTIONS, { color: "#ff4fd8", lineWidth: 3 });
-      draw.drawLandmarks(h.cur, { color: "#fff", radius: 2 });
-      label(`${h.side}: ${GEMOJI[h.g] || ""} ${h.g} ${Math.round((h.conf || 0) * 100)}%`, h.cur[0].x * W() + 40, h.cur[0].y * H() + 40, "#ff4fd8");
+      if (opt.handSkel) { draw.drawConnectors(h.cur, GestureRecognizer.HAND_CONNECTIONS, { color: "#ff4fd8", lineWidth: 3 });
+        draw.drawLandmarks(h.cur, { color: "#fff", radius: 2 }); }
+      if (opt.handLabels) label(`${h.side}: ${GEMOJI[h.g] || ""} ${h.g} ${Math.round((h.conf || 0) * 100)}%`, h.cur[0].x * W() + 40, h.cur[0].y * H() + 40, "#ff4fd8");
       // light up each fingertip that's counted as "up"
-      [4, 8, 12, 16, 20].forEach((tip, k) => { if (!h.up?.[k]) return; ctx.fillStyle = "#ffd166"; ctx.beginPath(); ctx.arc(h.cur[tip].x * W(), h.cur[tip].y * H(), 6, 0, 7); ctx.fill(); });
+      if (opt.handTips) [4, 8, 12, 16, 20].forEach((tip, k) => { if (!h.up?.[k]) return; ctx.fillStyle = "#ffd166"; ctx.beginPath(); ctx.arc(h.cur[tip].x * W(), h.cur[tip].y * H(), 6, 0, 7); ctx.fill(); });
     }
   }
   if (active.has("pose") && R.pose) {
@@ -1389,10 +2158,17 @@ function sceneText() {
   if (active.has("text") && X.text) parts.push("Text visible: \"" + X.text.slice(0, 200) + "\"");
   if (active.has("qr") && X.codes.length) parts.push("Codes: " + X.codes.map(c => c.value).join(", "));
   if (active.has("gaze") && X.gaze) parts.push("Gaze: " + X.gaze);
-  if (active.has("workout")) parts.push(`Workout: ${X.squats} squats, ${X.raises} arm raises`);
+  if (active.has("workout")) { const ex = EXI[opt.ex]; parts.push(`Workout: doing ${ex.name}, ${ex.kind === "hold" ? Math.floor(WK.hold) + " s held" : (WK.counts[ex.id] || 0) + " reps"} so far`); }
+  if (active.has("depth") && X.measure) parts.push("Measured distance between two tapped points: " + X.measure);
+  if (active.has("clavmax") && X.clav) parts.push("Face geometry: " + X.clav);
+  if (active.has("asl") && X.asl) parts.push("Fingerspelled so far: " + X.asl);
+  if (active.has("rps")) parts.push(`Rock paper scissors score: user ${RPS.me}, JARVIS ${RPS.ai}`);
+  if (active.has("blink") && X.blink) parts.push("Blinks: " + X.blink);
+  if (active.has("facetouch")) parts.push(`Face touches: ${FT.n}`);
+  if (active.has("holo")) parts.push("Showing a 3D " + opt.holoModel + " hologram the user can grab with their hands");
   if (active.has("fingers")) parts.push(`Fingers held up: ${X.fingers ?? 0}`);
   if (active.has("posture") && X.posture) parts.push("Posture: " + X.posture);
-  if (active.has("distance") && X.distance) parts.push(`Distance from camera: about ${X.distance} cm`);
+  if (active.has("distance") && X.distance) parts.push(`Distance from camera: about ${X.distance}`);
   if (active.has("color") && X.color) parts.push("Colour at the centre crosshair: " + X.color);
   if (active.has("people")) parts.push(`People in view: ${X.people ?? 0}`);
   if (active.has("pulse") && X.pulse) parts.push(`Estimated heart rate: ${X.pulse} BPM`);
@@ -1926,7 +2702,7 @@ $("voice").onclick = () => { voiceOn = !voiceOn; $("voice").classList.toggle("on
 $("snap").onclick = () => { const a = document.createElement("a"); a.download = `vision-${Date.now()}.png`; a.href = out.toDataURL(); a.click(); };
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") return;
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && active.has("draw")) { X.strokes.pop(); drawing = null; e.preventDefault(); return; }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && active.has("draw")) { e.shiftKey ? redoDraw() : undoDraw(); e.preventDefault(); return; }
   if (e.metaKey || e.ctrlKey) return;
   const m = MODES.find(m => m[2].toLowerCase() === e.key.toLowerCase());
   if (m) toggle(m[0]);
