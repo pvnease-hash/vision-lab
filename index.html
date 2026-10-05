@@ -170,7 +170,7 @@ const MODES = [
   ["gaze", "Gaze & drowsy", "G"], ["draw", "Air draw", "D"], ["workout", "Workout reps", "W"], ["depth", "Depth β", "P"],
   ["fingers", "Finger count", "N"], ["posture", "Posture check", "O"], ["distance", "Distance", "L"], ["color", "Color ID", "C"],
   ["blur", "Face blur", "B"], ["people", "People counter", "U"], ["intruder", "Intruder alert", "I"], ["hud", "Iron Man HUD", "H"],
-  ["pulse", "Heart rate β", "K"],
+  ["pulse", "Heart rate β", "K"], ["ar", "AR menus & keypad", "A"], ["thoughts", "Thoughts & predictions", "J"], ["ghost", "Ghost hunter 👻", "X"],
   ["filter", "Filter: off", "F"],
 ];
 const $ = id => document.getElementById(id);
@@ -334,7 +334,7 @@ async function make(cls, path, extra = {}, mode = "VIDEO") {
     catch (e) { if (delegate === "CPU") throw e; }
   }
 }
-const NEEDS = { fingers: "hands", posture: "pose", distance: "faces", blur: "faces", intruder: "objects", people: "objects", pulse: "mesh", hud: "objects" };
+const NEEDS = { fingers: "hands", posture: "pose", distance: "faces", blur: "faces", intruder: "objects", people: "objects", pulse: "mesh", hud: "objects", ar: "hands", thoughts: "objects", ghost: "objects" };
 async function ensure(key) {
   if (key === "color") return;
   if (NEEDS[key]) { if (!vision) return; await ensure(NEEDS[key]); if (models[NEEDS[key]]) models[key] = true; return; }
@@ -646,25 +646,109 @@ function drawGaze(now) {
   label(drowsy ? "😴 Eyes closed!" : "👀 Looking " + dir, maxX * W(), Math.max(46, minY * H() - 30), drowsy ? "#ff4d4d" : "#9ad1ff");
   if (drowsy) { banner("😴 WAKE UP!", "#ff4d4d"); if (now - drowsyWarned > 10000) { drowsyWarned = now; say("Wake up, sir."); } }
 }
-// Air draw: point with your index finger to draw, open hand to erase
-let drawing = null, openSince = 0;
-function drawAir(now) {
-  for (const h of handSmooth) {
-    const tip = h.cur[8];
-    const up = fingersUp(h.cur), pen = up[1] && !up[2] && !up[3] && !up[4];   // only the index finger raised
-    if (pen) { if (!drawing) { drawing = []; X.strokes.push(drawing); } const last = drawing[drawing.length - 1];
-      if (!last || Math.hypot(last.x - tip.x, last.y - tip.y) > 0.004) drawing.push({ x: tip.x, y: tip.y }); }
-    else drawing = null;
-    if (up.filter(Boolean).length >= 5 || h.g === "Open hand") { openSince ||= now; if (now - openSince > 800) { X.strokes = []; drawing = null; } } else openSince = 0;
-    break;
-  }
-  if (!handSmooth.length || !R.hands?.landmarks?.length) drawing = null;
-  const h0 = handSmooth[0];
-  if (h0 && R.hands?.landmarks?.length) { const t = h0.cur[8]; ctx.fillStyle = drawing ? "#2fd4ff" : "rgba(255,255,255,.5)"; ctx.beginPath(); ctx.arc(t.x * W(), t.y * H(), drawing ? 9 : 6, 0, 7); ctx.fill(); }
-  ctx.save(); ctx.lineCap = ctx.lineJoin = "round"; ctx.shadowColor = "#2fd4ff"; ctx.shadowBlur = 14; ctx.strokeStyle = "#bff3ff"; ctx.lineWidth = 6;
-  for (const st of X.strokes) { if (st.length < 2) continue; ctx.beginPath(); st.forEach((p, i) => i ? ctx.lineTo(p.x * W(), p.y * H()) : ctx.moveTo(p.x * W(), p.y * H())); ctx.stroke(); }
-  ctx.restore();
+// Air draw 2.0: ☝️ point (index finger) OR 🤏 pinch thumb+index = pen down. ✋ hold open hand 1 s = erase all.
+// Left-edge toolbar: colours, brush size, undo, clear, save — hover your fingertip on one for half a second (or tap/click it).
+// Mouse / finger-on-screen drawing works too.
+let drawing = null, openSince = 0, penOn = false, penOffT = 0, penPt = null, inkIdx = 0, inkW = 7, tbHover = null, tbHoverT = 0, tbRects = [];
+const INK = ["#2fd4ff", "#ff4fd8", "#ffd166", "#3ddc84", "#ff4d4d", "#ffffff", "rainbow"], sparks = [];
+function penState(h) {
+  const p = h.cur, up = fingersUp(p), size = Math.hypot(p[0].x - p[9].x, p[0].y - p[9].y) || 0.1;
+  const pinch = Math.hypot(p[4].x - p[8].x, p[4].y - p[8].y) / size < 0.38;
+  const point = (up[1] && !up[2] && !up[3]) || h.g === "Pointing up";
+  const open = !pinch && (up.filter(Boolean).length >= 5 || h.g === "Open hand");
+  return { pen: (pinch || point) && !open, open, pinch, tip: pinch ? { x: (p[4].x + p[8].x) / 2, y: (p[4].y + p[8].y) / 2 } : p[8] };
 }
+const toScreen = p => ({ x: (mirror ? 1 - p.x : p.x) * W(), y: p.y * H() });
+function addInk(pt) {           // pt in normalised, un-mirrored video coords
+  if (!drawing) { drawing = { c: INK[inkIdx], w: inkW, pts: [] }; X.strokes.push(drawing); }
+  const last = drawing.pts[drawing.pts.length - 1];
+  if (!last || Math.hypot(last.x - pt.x, last.y - pt.y) > 0.0025) drawing.pts.push({ x: pt.x, y: pt.y });
+  if (sparks.length < 80) for (let i = 0; i < 2; i++) sparks.push({ x: pt.x * W(), y: pt.y * H(), vx: (Math.random() - 0.5) * 3, vy: (Math.random() - 0.5) * 3, life: 1 });
+}
+function toolbarAct(id) {
+  clickSound(1700);
+  if (id.startsWith("ink")) inkIdx = +id.slice(3);
+  else if (id === "size") inkW = inkW === 4 ? 7 : inkW === 7 ? 12 : 4;
+  else if (id === "undo") X.strokes.pop();
+  else if (id === "clear") X.strokes = [];
+  else if (id === "save") $("snap").click();
+  drawing = null;
+}
+function drawToolbar(now, cursor) {
+  const u = Math.min(H() / 360, W() / 420), s = 30 * u, g = 6 * u, x = 8 * u; let y = 34 * u; tbRects = [];
+  const items = [...INK.map((c, i) => ({ id: "ink" + i, c })), { id: "size", t: inkW === 4 ? "S" : inkW === 7 ? "M" : "L" }, { id: "undo", t: "↶" }, { id: "clear", t: "🗑" }, { id: "save", t: "💾" }];
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = "rgba(6,18,28,.6)"; ctx.fillRect(x - 4 * u, y - 4 * u, s + 8 * u, items.length * (s + g) + 4 * u);
+  let hov = null;
+  for (const it of items) {
+    const r = { id: it.id, x, y, w: s, h: s }; tbRects.push(r);
+    const over = cursor && cursor.x >= x - 6 * u && cursor.x <= x + s + 6 * u && cursor.y >= y && cursor.y <= y + s; if (over) hov = it.id;
+    ctx.beginPath(); ctx.arc(x + s / 2, y + s / 2, s / 2 - 2, 0, 7);
+    if (it.c) { if (it.c === "rainbow") { const gr = ctx.createConicGradient ? ctx.createConicGradient(now / 500, x + s / 2, y + s / 2) : null;
+        if (gr) ["red", "orange", "yellow", "lime", "cyan", "blue", "magenta", "red"].forEach((c, i, a) => gr.addColorStop(i / (a.length - 1), c)); ctx.fillStyle = gr || "#fff"; } else ctx.fillStyle = it.c; ctx.fill(); }
+    else { ctx.fillStyle = "rgba(255,255,255,.12)"; ctx.fill(); ctx.fillStyle = "#e9fbff"; ctx.font = `bold ${14 * u}px -apple-system,sans-serif`; ctx.fillText(it.t, x + s / 2, y + s / 2 + 1); }
+    ctx.lineWidth = (it.id === "ink" + inkIdx) ? 3 : over ? 2 : 1; ctx.strokeStyle = (it.id === "ink" + inkIdx || over) ? "#fff" : "rgba(255,255,255,.35)"; ctx.stroke();
+    if (over && tbHover === it.id) { const k = Math.min(1, (now - tbHoverT) / 500); ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x + s / 2, y + s / 2, s / 2 + 3, -1.57, -1.57 + k * 6.28); ctx.stroke(); }
+    y += s + g;
+  }
+  ctx.restore();
+  if (hov !== tbHover) { tbHover = hov; tbHoverT = now; } else if (hov && now - tbHoverT > 500) { toolbarAct(hov); tbHoverT = now + 1500; }
+  return !!hov;
+}
+function strokePath(pts) {      // smooth curve through the points
+  ctx.beginPath(); ctx.moveTo(pts[0].x * W(), pts[0].y * H());
+  for (let i = 1; i < pts.length - 1; i++) { const a = pts[i], b = pts[i + 1]; ctx.quadraticCurveTo(a.x * W(), a.y * H(), (a.x + b.x) / 2 * W(), (a.y + b.y) / 2 * H()); }
+  const l = pts[pts.length - 1]; ctx.lineTo(l.x * W(), l.y * H());
+}
+let peaceSince = 0;
+function drawAir(now) {
+  const handSeen = R.hands?.landmarks?.length > 0 && handSmooth.length > 0;
+  let st = null;
+  if (handSeen) { st = handSmooth.map(penState).sort((a, b) => b.pen - a.pen)[0]; }
+  const raw = !!st?.pen;
+  if (raw) { penOn = true; penOffT = 0; } else if (penOn) { penOffT ||= now; if (now - penOffT > 140) penOn = false; }   // ignore 1-frame dropouts
+  const cursor = st ? toScreen(st.tip) : null;
+  const onToolbar = drawToolbar(now, cursor);
+  if (st && penOn && !onToolbar) { penPt = penPt ? { x: penPt.x + (st.tip.x - penPt.x) * 0.55, y: penPt.y + (st.tip.y - penPt.y) * 0.55 } : { ...st.tip }; if (raw) addInk(penPt); }
+  else if (!mouseInk) { drawing = null; penPt = null; }
+  const peace = handSeen && !penOn && handSmooth.some(h => h.g === "Peace");   // ✌️ held = undo last stroke
+  if (peace) { peaceSince ||= now; if (now - peaceSince > 700) { if (X.strokes.length) { X.strokes.pop(); clickSound(900); } drawing = null; peaceSince = now + 1e9; } } else peaceSince = 0;
+  let eraseK = 0;
+  if (st?.open) { openSince ||= now; eraseK = (now - openSince) / 1000; if (eraseK >= 1) { if (X.strokes.length) clickSound(600); X.strokes = []; drawing = null; openSince = now + 1e9; } } else openSince = 0;
+  // ink
+  ctx.save(); ctx.lineCap = ctx.lineJoin = "round";
+  for (const s of X.strokes) { if (s.pts.length < 2) continue;
+    if (s.c === "rainbow") { ctx.shadowBlur = 12; for (let i = 1; i < s.pts.length; i++) { const c = `hsl(${(i * 6 + now / 20) % 360},100%,60%)`; ctx.strokeStyle = ctx.shadowColor = c; ctx.lineWidth = s.w;
+        ctx.beginPath(); ctx.moveTo(s.pts[i - 1].x * W(), s.pts[i - 1].y * H()); ctx.lineTo(s.pts[i].x * W(), s.pts[i].y * H()); ctx.stroke(); } continue; }
+    ctx.shadowColor = s.c; ctx.shadowBlur = 16; ctx.strokeStyle = s.c; ctx.lineWidth = s.w + 2; ctx.globalAlpha = 0.55; strokePath(s.pts); ctx.stroke();
+    ctx.globalAlpha = 1; ctx.shadowBlur = 0; ctx.strokeStyle = "rgba(255,255,255,.85)"; ctx.lineWidth = Math.max(1.5, s.w * 0.35); strokePath(s.pts); ctx.stroke(); }
+  ctx.restore();
+  // sparkles
+  ctx.save(); for (let i = sparks.length - 1; i >= 0; i--) { const p = sparks[i]; p.x += p.vx; p.y += p.vy; p.life -= 0.06; if (p.life <= 0) { sparks.splice(i, 1); continue; }
+    ctx.globalAlpha = p.life; ctx.fillStyle = INK[inkIdx] === "rainbow" ? `hsl(${now / 5 % 360},100%,70%)` : INK[inkIdx]; ctx.fillRect(p.x - 1.5, p.y - 1.5, 3, 3); } ctx.restore();
+  // pen cursor + status
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (cursor) { const col = INK[inkIdx] === "rainbow" ? "#fff" : INK[inkIdx];
+    ctx.strokeStyle = col; ctx.fillStyle = penOn ? col : "rgba(255,255,255,.25)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cursor.x, cursor.y, penOn ? 8 : 12, 0, 7); ctx.fill(); ctx.stroke();
+    if (eraseK > 0) { ctx.strokeStyle = "#ff4d4d"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 22, -1.57, -1.57 + Math.min(1, eraseK) * 6.28); ctx.stroke(); } }
+  ctx.restore();
+  const msg = !handSeen && !mouseInk ? ["🖐 Show your hand to the camera (arm's length, good light)"]
+    : penOn ? ["✏️ DRAWING — curl your finger or open the pinch to lift the pen"]
+    : eraseK > 0 ? ["✋ Keep holding open to erase…"]
+    : ["☝️ Point your index finger or 🤏 pinch to draw", "✌️ Peace sign = undo · ✋ open hand 1 s = erase all · ⌘Z"];
+  panel(msg, W() / 2 - 170, H() - 26 - msg.length * 19, penOn ? "#2fd4ff" : "#e6edf3");
+}
+// draw with mouse / finger on the screen too
+let mouseInk = false;
+(() => { const pt = e => { const r = out.getBoundingClientRect(); const sx = (e.clientX - r.left) * out.width / r.width, sy = (e.clientY - r.top) * out.height / r.height;
+    return { sx, sy, n: { x: mirror ? 1 - sx / out.width : sx / out.width, y: sy / out.height } }; };
+  out.addEventListener("pointerdown", e => { if (!active.has("draw")) return; const p = pt(e);
+    const tb = tbRects.find(r => p.sx >= r.x && p.sx <= r.x + r.w && p.sy >= r.y && p.sy <= r.y + r.h); if (tb) { toolbarAct(tb.id); return; }
+    if (active.has("ar") && (arButtons.some(b => p.sx >= b.x && p.sx <= b.x + b.w && p.sy >= b.y && p.sy <= b.y + b.h) || (arPanelRect && p.sx >= arPanelRect.x && p.sx <= arPanelRect.x + arPanelRect.w && p.sy >= arPanelRect.y && p.sy <= arPanelRect.y + arPanelRect.h))) return;
+    mouseInk = true; drawing = null; addInk(p.n); try { out.setPointerCapture(e.pointerId); } catch {} e.preventDefault(); });
+  out.addEventListener("pointermove", e => { if (mouseInk) addInk(pt(e).n); });
+  for (const ev of ["pointerup", "pointercancel"]) out.addEventListener(ev, () => { if (mouseInk) { mouseInk = false; drawing = null; } });
+})();
 // Workout reps (squats + both-arms-up raises)
 let squatDown = false, armsUp = false;
 const angle = (a, b, c) => { const v1 = [a.x - b.x, a.y - b.y], v2 = [c.x - b.x, c.y - b.y];
@@ -771,7 +855,6 @@ function drawIntruder(now) {
 function drawHud(now) {
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const w = W(), h = H(), c = "rgba(47,212,255,.85)"; ctx.strokeStyle = c; ctx.fillStyle = c; ctx.lineWidth = 2;
   const L = 30; for (const [x, y, dx, dy] of [[12, 12, 1, 1], [w - 12, 12, -1, 1], [12, h - 12, 1, -1], [w - 12, h - 12, -1, -1]]) { ctx.beginPath(); ctx.moveTo(x + dx * L, y); ctx.lineTo(x, y); ctx.lineTo(x, y + dy * L); ctx.stroke(); }
-  ctx.beginPath(); ctx.arc(w / 2, h / 2, 26, now / 600, now / 600 + 4); ctx.stroke(); ctx.beginPath(); ctx.arc(w / 2, h / 2, 40, -now / 900, -now / 900 + 2); ctx.stroke();
   ctx.font = "12px monospace"; ctx.fillText("J.A.R.V.I.S. ONLINE", w - 170, h - 40); ctx.fillText(new Date().toLocaleTimeString(), w - 170, h - 24);
   ctx.fillText(`TARGETS: ${tracks.objects.filter(t => t.hits >= 2).length + (R.faces?.length || 0)}`, 24, h - 24);
   ctx.restore();
@@ -801,6 +884,273 @@ function drawPulse(now) {
   X.pulse = bpm;
   panel([bpm ? `❤️ ~${bpm} BPM (estimate, not medical)` : `❤️ Measuring… hold still ${Math.max(0, 8 - Math.floor((now - (ppg[0]?.[0] || now)) / 1000))}s`], 8, H() - 172, "#ff8c9a");
 }
+// =================== GHOST HUNTER (for fun) ===================
+// Real measurements, spooky presentation: motion where no person/animal is detected, sudden light flicker,
+// and "orbs" (tiny bright specks that pop in, usually dust or bugs). It does not detect actual ghosts.
+let gPrev = null, gLevel = 0, gLastAlarm = 0, gBright = 0; const gLog = [], gOrbs = [];
+function drawGhost(now) {
+  const c = grab(96), gw = c.width, gh = c.height, d = wctx.getImageData(0, 0, gw, gh).data, gray = new Float32Array(gw * gh);
+  let mean = 0; for (let i = 0; i < gray.length; i++) { gray[i] = (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / 3; mean += gray[i]; } mean /= gray.length;
+  const k = W() / gw, explained = (R.objects || []).filter(o => /person|dog|cat|bird/.test(o.categories[0].categoryName) && o.categories[0].score > 0.35).map(o => o.boundingBox);
+  let unexplained = 0, cells = [];
+  if (gPrev) {
+    for (let y = 0; y < gh; y += 4) for (let x = 0; x < gw; x += 4) {
+      let diff = 0; for (let yy = y; yy < y + 4 && yy < gh; yy++) for (let xx = x; xx < x + 4 && xx < gw; xx++) diff += Math.abs(gray[yy * gw + xx] - gPrev[yy * gw + xx]);
+      diff /= 16; const px = x * k, py = y * k;
+      if (diff > 14 && !explained.some(b => px >= b.originX - 20 && px <= b.originX + b.width + 20 && py >= b.originY - 20 && py <= b.originY + b.height + 20)) { unexplained++; cells.push([px, py]); }
+      if (diff > 60 && gOrbs.length < 6 && Math.random() < 0.15) { let peak = 0; for (let yy = y; yy < y + 4 && yy < gh; yy++) for (let xx = x; xx < x + 4 && xx < gw; xx++) peak = Math.max(peak, gray[yy * gw + xx]);
+        if (peak > mean + 70) gOrbs.push({ x: px + 2 * k, y: py + 2 * k, t: now }); }
+    }
+  }
+  gPrev = gray;
+  const flicker = gBright ? Math.abs(mean - gBright) : 0; gBright = gBright ? gBright * 0.9 + mean * 0.1 : mean;
+  const raw = Math.min(5, unexplained / 6 + flicker / 4 + gOrbs.length * 0.4);
+  gLevel = gLevel * 0.85 + raw * 0.15;
+  // ectoplasm where the unexplained motion is
+  ctx.save(); ctx.globalCompositeOperation = "lighter";
+  for (const [x, y] of cells) { const g = ctx.createRadialGradient(x + 2 * k, y + 2 * k, 0, x + 2 * k, y + 2 * k, 6 * k); g.addColorStop(0, "rgba(120,255,170,.35)"); g.addColorStop(1, "rgba(120,255,170,0)"); ctx.fillStyle = g; ctx.fillRect(x - 4 * k, y - 4 * k, 12 * k, 12 * k); }
+  for (let i = gOrbs.length - 1; i >= 0; i--) { const o = gOrbs[i], age = (now - o.t) / 1500; if (age > 1) { gOrbs.splice(i, 1); continue; }
+    const g = ctx.createRadialGradient(o.x, o.y, 0, o.x, o.y, 18); g.addColorStop(0, `rgba(255,255,255,${0.8 * (1 - age)})`); g.addColorStop(1, "rgba(180,220,255,0)"); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(o.x, o.y, 18, 0, 7); ctx.fill(); }
+  ctx.restore();
+  if (gLevel > 3.6 && now - gLastAlarm > 6000) { gLastAlarm = now; beep(); gLog.unshift(`${new Date().toLocaleTimeString()} — ${gOrbs.length ? "orb" : flicker > 6 ? "light flicker" : "unexplained motion"}`); gLog.length = Math.min(gLog.length, 3); X.ghost = gLog[0]; }
+  if (gLevel > 3.6) banner("👻 ANOMALY DETECTED", "#78ffaa");
+  // EMF-style meter
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const u = Math.min(H() / 360, W() / 420), x0 = 10 * u, y0 = H() * 0.32, lw = 26 * u, lh = 14 * u;
+  ctx.fillStyle = "rgba(6,12,8,.75)"; ctx.fillRect(x0 - 6 * u, y0 - 26 * u, 5 * (lw + 4 * u) + 8 * u, 58 * u + gLog.length * 15 * u);
+  ctx.font = `bold ${11 * u}px monospace`; ctx.fillStyle = "#78ffaa"; ctx.fillText("👻 PARANORMAL METER", x0, y0 - 10 * u);
+  const cols = ["#3ddc84", "#a6e22e", "#ffd166", "#ff8c42", "#ff4d4d"];
+  for (let i = 0; i < 5; i++) { ctx.fillStyle = gLevel > i + 0.5 ? cols[i] : "rgba(255,255,255,.12)"; if (gLevel > i + 0.5) { ctx.shadowColor = cols[i]; ctx.shadowBlur = 12; } ctx.fillRect(x0 + i * (lw + 4 * u), y0, lw, lh); ctx.shadowBlur = 0; }
+  ctx.font = `${9.5 * u}px monospace`; ctx.fillStyle = "#cfe"; ctx.fillText(`motion ${unexplained} · flicker ${flicker.toFixed(1)} · orbs ${gOrbs.length}`, x0, y0 + lh + 13 * u);
+  gLog.forEach((l, i) => { ctx.fillStyle = "#ff8c9a"; ctx.fillText("⚠ " + l, x0, y0 + lh + 28 * u + i * 15 * u); });
+  ctx.fillStyle = "rgba(255,255,255,.5)"; ctx.fillText("for fun: reads motion & light, not real ghosts", x0, y0 + lh + 28 * u + gLog.length * 15 * u);
+  ctx.restore();
+}
+// =================== THOUGHTS & PREDICTIONS ===================
+// Shows what the AI is "thinking": its top guesses with %, runner-up guesses, and short-term predictions
+// (where your hand is heading, what you're reaching for, what you're probably doing). With a Gemini key it
+// also shows a real AI inner monologue + prediction every ~12 s.
+const handHist = [], personHist = []; let aiThought = null, aiThoughtT = 0, aiThoughtBusy = false;
+const ACTIVITY = [[/phone/, "using a phone"], [/cup|mug|bottle|glass|can\b|coffee|water/, "having a drink"], [/book|paper|magazine/, "reading"],
+  [/laptop|keyboard|mouse|monitor/, "working on a computer"], [/remote|tv|television/, "watching TV"], [/fork|knife|spoon|bowl|sandwich|pizza|donut|banana|apple|orange|cake|food/, "eating"],
+  [/toothbrush/, "brushing teeth"], [/scissors|pen|pencil/, "making something"], [/dog|cat/, "hanging out with a pet"], [/controller|joystick/, "gaming"]];
+function velOf(h, now) { while (h.length && now - h[0].t > 450) h.shift(); if (h.length < 3) return null; const a = h[0], b = h[h.length - 1], dt = (b.t - a.t) / 1000;
+  return dt < 0.12 ? null : { vx: (b.x - a.x) / dt, vy: (b.y - a.y) / dt, ...(b.s != null ? { vs: (b.s - a.s) / dt / Math.max(1, a.s) } : {}) }; }
+async function geminiThought() {
+  const key = $("geminiKey").value.trim(); if (!key || aiThoughtBusy || (typeof liveOn !== "undefined" && liveOn) || busy) return;
+  aiThoughtBusy = true; aiThoughtT = performance.now();
+  try {
+    const img = snapshot();
+    for (const [model, th] of [["gemini-flash-latest", true], ["gemini-flash-latest", false], ["gemini-2.5-flash", true]]) {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, { method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [...(img ? [{ inline_data: { mime_type: "image/jpeg", data: img } }] : []),
+          { text: `You are JARVIS silently watching this live camera frame. Detectors report: ${sceneText()}. Reply ONLY as JSON: {"thought": "<your inner thought about what you see, max 14 words>", "prediction": "<what the person will most likely do in the next few seconds, max 12 words>", "confidence": <0-100>}` }] }],
+          generationConfig: { responseMimeType: "application/json", maxOutputTokens: 150, temperature: 0.7, ...(th ? { thinkingConfig: { thinkingBudget: 0 } } : {}) } }) });
+      if (r.status === 404 || (r.status === 400 && th)) continue;
+      const j = await r.json(); if (!r.ok) throw new Error(j.error?.message || r.status);
+      const ans = JSON.parse((j.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("") || "{}");
+      if (ans.thought) aiThought = { thought: String(ans.thought), prediction: String(ans.prediction || ""), conf: Math.round(+ans.confidence || 0), t: performance.now() };
+      break;
+    }
+  } catch (e) { log("thought: " + e.message); }
+  aiThoughtBusy = false;
+}
+function drawThoughts(now) {
+  X.prediction = ""; const lines = [], pct = v => Math.round(v * 100) + "%", w = W(), h = H();
+  // --- what I see (with the runner-up guesses) ---
+  const dets = (R.objects || []).filter(d => d.categories[0].score > 0.3).sort((a, b) => b.categories[0].score - a.categories[0].score);
+  lines.push(["👁 I see: " + (dets.length ? dets.slice(0, 4).map(d => `${d.categories[0].categoryName} ${pct(d.categories[0].score)}`).join(", ") : "nothing I'm sure of yet"), "#e6edf3"]);
+  const st = heldState[0];
+  if (st && st.votes.size && now - st.last < 1500) { const v = [...st.votes.entries()].sort((a, b) => b[1].w - a[1].w).slice(0, 3), tot = v.reduce((s, [, x]) => s + x.w, 0) || 1;
+    lines.push(["✋ In hand, I think: " + v.map(([n, x], i) => `${i ? "" : "▶ "}${n} ${Math.round(x.w / tot * 100)}%`).join(" · "), "#7cfc00"]); }
+  const gs = R.hands?.gestures || [];
+  if (gs.length) lines.push(["🤚 Gesture: " + gs.map(g => { const c = g[0]; return c ? `${NICE[c.categoryName] || c.categoryName} ${pct(c.score)}` : ""; }).filter(Boolean).join(", "), "#ff4fd8"]);
+  const bs = R.mesh?.faceBlendshapes?.[0]?.categories;
+  if (bs) { const g = n => bs.find(c => c.categoryName === n)?.score || 0;
+    const emo = [["happy", (g("mouthSmileLeft") + g("mouthSmileRight")) / 2], ["surprised", (g("jawOpen") + g("browInnerUp")) / 2], ["frowning", (g("browDownLeft") + g("browDownRight")) / 2], ["neutral", 0.25]].sort((a, b) => b[1] - a[1]);
+    lines.push([`🙂 Mood guess: ${emo[0][0]} ${pct(Math.min(1, emo[0][1] / (emo[0][1] + emo[1][1] + 1e-6)))} (vs ${emo[1][0]})`, "#2fd4ff"]); }
+  // --- predictions ---
+  const preds = [];
+  const lm = R.hands?.landmarks?.length && handSmooth[0]?.cur;
+  if (lm) { const p = { x: lm[9].x * w, y: lm[9].y * h, t: now }; handHist.push(p); const v = velOf(handHist, now);
+    if (v) { const sp = Math.hypot(v.vx, v.vy);
+      if (sp > w * 0.15) {
+        const fx = p.x + v.vx * 0.5, fy = p.y + v.vy * 0.5;            // where the hand will be in 0.5 s
+        ctx.save(); ctx.setLineDash([6, 6]); ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(fx, fy); ctx.stroke();
+        ctx.setLineDash([]); ctx.globalAlpha = 0.5; ctx.beginPath(); ctx.arc(fx, fy, 16, 0, 7); ctx.stroke(); ctx.restore();
+        const sx = mirror ? -v.vx : v.vx, dir = Math.abs(sx) > Math.abs(v.vy) ? (sx > 0 ? "right" : "left") : (v.vy > 0 ? "down" : "up");
+        preds.push([`🔮 Hand moving ${dir} → will be there in 0.5 s`, "#ffd166"]);
+        let best = null;
+        for (const d of dets) { const c = d.categories[0].categoryName; if (c === "person") continue; const b = d.boundingBox, ox = b.originX + b.width / 2, oy = b.originY + b.height / 2;
+          const dx = ox - p.x, dy = oy - p.y, dist = Math.hypot(dx, dy), cos = (dx * v.vx + dy * v.vy) / (dist * sp + 1e-6);
+          if (cos > 0.8 && dist > 20 && (!best || cos > best.cos)) best = { c, cos, b, eta: dist / sp }; }
+        if (best) { const b = best.b; ctx.save(); ctx.setLineDash([4, 4]); ctx.strokeStyle = "#ff4fd8"; ctx.lineWidth = 3; ctx.strokeRect(b.originX - 4, b.originY - 4, b.width + 8, b.height + 8); ctx.restore();
+          label(`🎯 reaching for this? ${Math.round(best.cos * 100)}%`, b.originX + b.width, b.originY - 6, "#ff4fd8");
+          preds.push([`🔮 Reaching for the ${best.c} (${Math.round(best.cos * 100)}%, ~${best.eta.toFixed(1)} s)`, "#ff4fd8"]); X.prediction = `reaching for the ${best.c}`; }
+      } else preds.push(["🔮 Hand is steady", "#9aa5b1"]);
+    }
+  } else handHist.length = 0;
+  const person = dets.find(d => d.categories[0].categoryName === "person");
+  if (person) { const b = person.boundingBox; personHist.push({ x: b.originX + b.width / 2, y: b.originY, s: b.height, t: now }); const v = velOf(personHist, now);
+    if (v && Math.abs(v.vs) > 0.25) preds.push([`🔮 Person moving ${v.vs > 0 ? "toward" : "away from"} the camera`, "#ffd166"]); } else personHist.length = 0;
+  const things = [...dets.map(d => d.categories[0].categoryName), ...(heldCache.filter(x => x?.name).map(x => x.name.toLowerCase()))].join(" ");
+  const act = ACTIVITY.find(([re]) => re.test(things));
+  if (act) { preds.push([`🧩 Probably ${act[1]}`, "#3ddc84"]); if (!X.prediction?.startsWith("reaching")) X.prediction = act[1]; }
+  lines.push(...preds);
+  // --- real AI inner monologue (needs Gemini key) ---
+  if (now - aiThoughtT > 12000) geminiThought();
+  if (aiThought) { const k = Math.floor((now - aiThought.t) / 25);
+    lines.push(["💭 " + aiThought.thought.slice(0, k), "#bff3ff"]);
+    if (aiThought.prediction) lines.push([`🔮 AI predicts: ${aiThought.prediction.slice(0, Math.max(0, k - aiThought.thought.length))}${aiThought.conf ? ` (${aiThought.conf}%)` : ""}`, "#bff3ff"]); }
+  else if (!$("geminiKey").value.trim()) lines.push(["💭 Add a Gemini key for real AI thoughts", "#9aa5b1"]);
+  else if (aiThoughtBusy) lines.push(["💭 thinking" + ".".repeat(1 + Math.floor(now / 300) % 3), "#9aa5b1"]);
+  // --- draw the thought panel (bottom-right) ---
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); const u = Math.min(h / 360, w / 420), fs = Math.round(12 * u), lh = fs + 6;
+  ctx.font = `bold ${fs}px -apple-system,sans-serif`; const maxW = w * 0.62;
+  const fit = s => { if (ctx.measureText(s).width <= maxW) return s; while (s.length > 3 && ctx.measureText(s + "…").width > maxW) s = s.slice(0, -1); return s + "…"; };
+  const L = [["🧠 JARVIS THOUGHTS & PREDICTIONS", "#2fd4ff"], ...lines].map(([t, c]) => [fit(t), c]);
+  const pw = Math.max(...L.map(([t]) => ctx.measureText(t).width)) + 18, ph = L.length * lh + 10, px = w - pw - 8, py = h - ph - 8;
+  ctx.fillStyle = "rgba(6,18,28,.72)"; ctx.fillRect(px, py, pw, ph); ctx.strokeStyle = "rgba(47,212,255,.6)"; ctx.strokeRect(px, py, pw, ph);
+  L.forEach(([t, c], i) => { ctx.fillStyle = c; ctx.fillText(t, px + 9, py + 5 + lh * (i + 0.75)); });
+  ctx.restore();
+}
+// =================== AR INTERFACE: click things floating in the video with your hand ===================
+// Index finger = cursor. Pinch thumb + index = click (or hover 1 s). Pinch the title bar and move to drag a panel.
+// Mouse / touch clicks on the video work too.
+const AR = { page: "menu", open: true, pos: {}, calc: "", text: "", hoverId: null, hoverT: 0, pinch: false, cursor: null, drag: null,
+             flash: {}, toast: "", toastT: 0, game: null };
+let arButtons = [], arPanelRect = null, arAudio = null;
+function arToast(t) { AR.toast = t; AR.toastT = performance.now(); }
+function clickSound(f = 1400) { try { const a = (typeof liveOut !== "undefined" && liveOut) || (arAudio ||= new AudioContext()); const o = a.createOscillator(), g = a.createGain();
+  o.frequency.value = f; g.gain.setValueAtTime(0.08, a.currentTime); g.gain.exponentialRampToValueAtTime(0.001, a.currentTime + 0.09);
+  o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime + 0.1); } catch {} }
+function arClick(b) { AR.flash[b.id] = performance.now(); clickSound(); try { b.act(); } catch (e) { log("AR: " + e.message); } }
+function calcKey(k) {
+  if (AR.calc === "Error") AR.calc = "";
+  if (k === "C") AR.calc = "";
+  else if (k === "⌫") AR.calc = AR.calc.slice(0, -1);
+  else if (k === "=") {
+    const expr = AR.calc.replace(/×/g, "*").replace(/÷/g, "/").replace(/−/g, "-");
+    try { if (!/^[\d+\-*/.() ]+$/.test(expr)) throw 0; const v = Function("return (" + expr + ")")(); if (!isFinite(v)) throw 0;
+      AR.calc = String(Math.round(v * 1e10) / 1e10); say(AR.calc); } catch { AR.calc = "Error"; }
+  } else if (AR.calc.length < 22) AR.calc += k;
+}
+function arPages(u) {
+  const g = 6 * u, P = { buttons: [] }, B = (label, x, y, w, h, act, extra = {}) => P.buttons.push({ id: AR.page + ":" + label, label, x, y, w, h, act, ...extra });
+  const grid = (rows, bw, bh, y0, fn) => rows.forEach((r, i) => r.forEach((k, j) => B(k, g + j * (bw + g), y0 + i * (bh + g), bw, bh, () => fn(k))));
+  const top = 26 * u + g;
+  if (AR.page === "menu") {
+    P.title = "J.A.R.V.I.S. MENU"; const bw = 128 * u, bh = 34 * u;
+    const items = [["🔢 Keypad", () => AR.page = "keypad"], ["⌨️ Keyboard", () => AR.page = "keyboard"], ["🧩 Vision modes", () => AR.page = "modes"],
+      ["🎨 Next filter", () => { toggle("filter"); arToast("Filter: " + FILTERS[filterIdx].name); }], ["📸 Snapshot", () => { $("snap").click(); arToast("Snapshot saved"); }],
+      ["👁 What do you see?", () => ask("What do you see right now?")], ["🎤 Talk to JARVIS", () => $("talk").click()],
+      ["🎯 Target game", () => { AR.page = "game"; AR.game = { score: 0, end: performance.now() + 30000, t: null }; }]];
+    items.forEach(([l, f], i) => B(l, g + (i % 2) * (bw + g), top + Math.floor(i / 2) * (bh + g), bw, bh, f));
+    P.w = 2 * bw + 3 * g; P.h = top + 4 * (bh + g);
+  } else if (AR.page === "keypad") {
+    P.title = "KEYPAD · CALCULATOR"; const bw = 50 * u, bh = 34 * u;
+    P.display = AR.calc || "0"; grid([["7", "8", "9", "÷"], ["4", "5", "6", "×"], ["1", "2", "3", "−"], ["C", "0", ".", "+"], ["⌫", "(", ")", "="]], bw, bh, top + 36 * u, calcKey);
+    P.w = 4 * bw + 5 * g; P.h = top + 36 * u + 5 * (bh + g);
+  } else if (AR.page === "keyboard") {
+    P.title = "KEYBOARD → JARVIS"; const bw = 30 * u, bh = 32 * u;
+    P.display = AR.text + (performance.now() % 1000 < 500 ? "|" : "");
+    const rows = ["1234567890", "QWERTYUIOP", "ASDFGHJKL?", "ZXCVBNM,.'"].map(r => [...r]);
+    grid(rows, bw, bh, top + 36 * u, k => { if (AR.text.length < 120) AR.text += k.toLowerCase(); });
+    const y = top + 36 * u + 4 * (bh + g);
+    B("space", g, y, 5 * bw + 4 * g, bh, () => AR.text += " ");
+    B("⌫", g + 5 * (bw + g), y, 2 * bw + g, bh, () => AR.text = AR.text.slice(0, -1));
+    B("Ask ➤", g + 7 * (bw + g), y, 3 * bw + 2 * g, bh, () => { if (AR.text.trim()) { ask(AR.text); AR.text = ""; arToast("Sent to JARVIS"); } }, { on: true });
+    P.w = 10 * bw + 11 * g; P.h = y + bh + g;
+  } else if (AR.page === "modes") {
+    P.title = "VISION MODES"; const bw = 104 * u, bh = 26 * u, list = MODES.filter(m => m[0] !== "ar" && m[0] !== "filter");
+    list.forEach(([key, name], i) => B(name, g + (i % 3) * (bw + g), top + Math.floor(i / 3) * (bh + g), bw, bh, () => toggle(key), { on: active.has(key), small: true }));
+    P.w = 3 * bw + 4 * g; P.h = top + Math.ceil(list.length / 3) * (bh + g);
+  } else if (AR.page === "game") {
+    const gm = AR.game, left = Math.max(0, Math.ceil((gm.end - performance.now()) / 1000));
+    P.title = "TARGET GAME"; P.display = left ? `🎯 ${gm.score} pts · ${left}s` : `Done! ${gm.score} pts`;
+    B("↻ Restart", g, top + 36 * u, 100 * u, 30 * u, () => { AR.game = { score: 0, end: performance.now() + 30000, t: null }; });
+    P.w = 100 * u + 2 * g; P.h = top + 36 * u + 30 * u + g;
+  }
+  return P;
+}
+function arTargetGame(now, cur) {
+  const gm = AR.game; if (!gm || now > gm.end) return;
+  if (!gm.t || now - gm.t.born > 2200) gm.t = { x: W() * (0.12 + Math.random() * 0.5), y: H() * (0.2 + Math.random() * 0.65), r: H() * 0.06, born: now };
+  const t = gm.t, pulse = 1 + 0.08 * Math.sin(now / 120);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.shadowColor = "#ff4fd8"; ctx.shadowBlur = 20; ctx.lineWidth = 4;
+  for (const [k, c] of [[1, "#ff4fd8"], [0.6, "#fff"], [0.25, "#ff4fd8"]]) { ctx.strokeStyle = c; ctx.beginPath(); ctx.arc(t.x, t.y, t.r * k * pulse, 0, 7); ctx.stroke(); }
+  ctx.restore();
+  if (cur && Math.hypot(cur.x - t.x, cur.y - t.y) < t.r * 1.2) { gm.score++; clickSound(2000); gm.t = null; }
+}
+function arPointer() {
+  if (!R.hands?.landmarks?.length) return null;
+  const h = handSmooth.find(h => fingersUp(h.cur)[1]) || handSmooth[0]; if (!h) return null;
+  const p = h.cur, size = Math.hypot(p[0].x - p[9].x, p[0].y - p[9].y) || 0.1, d = Math.hypot(p[4].x - p[8].x, p[4].y - p[8].y) / size;
+  const k = Math.max(0, Math.min(1, (0.75 - d) / 0.4)), x = p[8].x * (1 - k) + (p[4].x + p[8].x) / 2 * k, y = p[8].y * (1 - k) + (p[4].y + p[8].y) / 2 * k;
+  return { x: (mirror ? 1 - x : x) * W(), y: y * H(), d, tip: { x: (mirror ? 1 - p[8].x : p[8].x) * W(), y: p[8].y * H() } };
+}
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h); }
+function drawAR(now) {
+  const u = Math.min(H() / 360, W() / 420), g = 6 * u;
+  arButtons = []; arPanelRect = null;
+  const ptr = arPointer(); AR.cursor = ptr;
+  if (AR.open) {
+    const P = arPages(u), pos = AR.pos[AR.page] ||= { x: W() - P.w - 10 * u, y: 30 * u };
+    pos.x = Math.max(0, Math.min(W() - P.w, pos.x)); pos.y = Math.max(0, Math.min(Math.max(0, H() - P.h), pos.y));
+    arPanelRect = { x: pos.x, y: pos.y, w: P.w, h: P.h, bar: 26 * u };
+    for (const b of P.buttons) arButtons.push({ ...b, x: b.x + pos.x, y: b.y + pos.y });
+    if (AR.page !== "menu") arButtons.push({ id: "back", label: "‹", x: pos.x + 4 * u, y: pos.y + 3 * u, w: 22 * u, h: 20 * u, act: () => AR.page = "menu" });
+    arButtons.push({ id: "close", label: "✕", x: pos.x + P.w - 26 * u, y: pos.y + 3 * u, w: 22 * u, h: 20 * u, act: () => AR.open = false });
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.shadowColor = "#2fd4ff"; ctx.shadowBlur = 18 * u; ctx.fillStyle = "rgba(6,18,28,.74)"; rr(pos.x, pos.y, P.w, P.h, 10 * u); ctx.fill();
+    ctx.shadowBlur = 0; ctx.strokeStyle = "rgba(47,212,255,.8)"; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = "rgba(47,212,255,.18)"; rr(pos.x, pos.y, P.w, 26 * u, 10 * u); ctx.fill();
+    ctx.fillStyle = "#bff3ff"; ctx.font = `bold ${11 * u}px monospace`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(P.title + "  ✥", pos.x + P.w / 2, pos.y + 13 * u);
+    if (P.display != null) { const dy = pos.y + 26 * u + g; ctx.fillStyle = "rgba(0,0,0,.55)"; rr(pos.x + g, dy, P.w - 2 * g, 30 * u, 6 * u); ctx.fill();
+      ctx.fillStyle = "#e9fbff"; ctx.font = `bold ${17 * u}px monospace`; ctx.textAlign = "right";
+      let s = P.display; while (s.length > 1 && ctx.measureText(s).width > P.w - 4 * g) s = s.slice(1); ctx.fillText(s, pos.x + P.w - 2 * g, dy + 15 * u); }
+    if (AR.toast && now - AR.toastT < 1600) { ctx.textAlign = "center"; ctx.font = `bold ${12 * u}px -apple-system,sans-serif`; ctx.fillStyle = "#3ddc84"; ctx.fillText(AR.toast, pos.x + P.w / 2, pos.y + P.h + 12 * u); }
+    ctx.restore();
+  } else arButtons.push({ id: "open", label: "☰ AR MENU", x: W() - 112 * u, y: 30 * u, w: 102 * u, h: 30 * u, act: () => AR.open = true, on: true });
+  if (AR.open && AR.page === "game") arTargetGame(now, ptr?.tip);
+  // what's under the cursor
+  const hit = ptr && arButtons.find(b => ptr.x >= b.x && ptr.x <= b.x + b.w && ptr.y >= b.y && ptr.y <= b.y + b.h);
+  const onBar = ptr && arPanelRect && !hit && ptr.x >= arPanelRect.x && ptr.x <= arPanelRect.x + arPanelRect.w && ptr.y >= arPanelRect.y && ptr.y <= arPanelRect.y + arPanelRect.bar;
+  // pinch with hysteresis so it doesn't flicker
+  let pinchDown = false;
+  if (ptr) { if (!AR.pinch && ptr.d < 0.33) { AR.pinch = true; pinchDown = true; } else if (AR.pinch && ptr.d > 0.5) AR.pinch = false; } else AR.pinch = false;
+  if (!AR.pinch) AR.drag = null;
+  if (pinchDown) { if (hit) { arClick(hit); AR.hoverT = now + 900; } else if (onBar) AR.drag = { dx: ptr.x - arPanelRect.x, dy: ptr.y - arPanelRect.y }; }
+  if (AR.drag && ptr) { AR.pos[AR.page] = { x: ptr.x - AR.drag.dx, y: ptr.y - AR.drag.dy }; }
+  // hover-to-click (dwell) for when pinching is awkward
+  let dwell = 0;
+  if (hit && !AR.pinch && !AR.drag) { if (AR.hoverId !== hit.id) { AR.hoverId = hit.id; AR.hoverT = now; } dwell = (now - AR.hoverT) / 1000;
+    if (dwell >= 1) { arClick(hit); AR.hoverT = now + 700; dwell = 0; } } else if (!hit) AR.hoverId = null;
+  // draw buttons
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const b of arButtons) {
+    const fl = now - (AR.flash[b.id] || 0) < 220, hov = hit === b;
+    ctx.fillStyle = fl ? "rgba(255,255,255,.95)" : b.on ? (hov ? "rgba(47,212,255,.75)" : "rgba(47,212,255,.45)") : hov ? "rgba(47,212,255,.35)" : "rgba(255,255,255,.08)";
+    if (hov) { ctx.shadowColor = "#2fd4ff"; ctx.shadowBlur = 14 * u; } rr(b.x, b.y, b.w, b.h, 6 * u); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.strokeStyle = hov ? "#bff3ff" : "rgba(47,212,255,.5)"; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = fl ? "#06121c" : "#e9fbff"; ctx.font = `${b.small ? 10.5 * u : b.w < 60 * u ? 15 * u : 12.5 * u}px -apple-system,sans-serif`;
+    ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 0.5);
+  }
+  // cursor
+  if (ptr) { ctx.strokeStyle = AR.pinch ? "#ff4fd8" : "#2fd4ff"; ctx.fillStyle = AR.pinch ? "rgba(255,79,216,.6)" : "rgba(47,212,255,.25)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(ptr.x, ptr.y, (AR.pinch ? 7 : 11) * u, 0, 7); ctx.fill(); ctx.stroke();
+    if (dwell > 0) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(ptr.x, ptr.y, 17 * u, -Math.PI / 2, -Math.PI / 2 + dwell * Math.PI * 2); ctx.stroke(); } }
+  ctx.restore();
+}
+// mouse / touch clicks on AR buttons
+(() => { let drag = null; const pt = e => { const r = out.getBoundingClientRect(); return { x: (e.clientX - r.left) * out.width / r.width, y: (e.clientY - r.top) * out.height / r.height }; };
+  out.addEventListener("pointerdown", e => { if (!active.has("ar")) return; const p = pt(e);
+    const b = arButtons.find(b => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h);
+    if (b) { arClick(b); e.preventDefault(); return; }
+    const R2 = arPanelRect; if (R2 && p.x >= R2.x && p.x <= R2.x + R2.w && p.y >= R2.y && p.y <= R2.y + R2.bar) { drag = { dx: p.x - R2.x, dy: p.y - R2.y }; out.setPointerCapture(e.pointerId); e.preventDefault(); } });
+  out.addEventListener("pointermove", e => { if (drag) { const p = pt(e); AR.pos[AR.page] = { x: p.x - drag.dx, y: p.y - drag.dy }; } });
+  out.addEventListener("pointerup", () => drag = null); })();
 function drawMore(now) {
   if (active.has("blur")) drawFaceBlur();
   if (active.has("hud")) drawHud(now);
@@ -811,6 +1161,10 @@ function drawMore(now) {
   if (active.has("people")) drawPeople();
   if (active.has("intruder")) drawIntruder(now); else intruderArmed = 0;
   if (active.has("pulse")) drawPulse(now); else ppg.length = 0;
+  if (active.has("ghost")) drawGhost(now); else gPrev = null;
+  if (active.has("thoughts")) drawThoughts(now);
+  if (active.has("ar")) drawAR(now);
+  const ta = active.has("draw") || active.has("ar") ? "none" : ""; if (out.style.touchAction !== ta) out.style.touchAction = ta;
 }
 // ---------- main loop ----------
 // The video is drawn every frame (smooth). The AI models run one at a time, taking turns,
@@ -823,9 +1177,9 @@ const NICE = { Closed_Fist: "Fist", Open_Palm: "Open hand", Pointing_Up: "Pointi
 function runOneModel(t) {
   const jobs = [];
   const any = (...k) => k.some(x => active.has(x));
-  if (any("objects", "intruder", "people", "hud") && models.objects) jobs.push("objects");
+  if (any("objects", "intruder", "people", "hud", "thoughts", "ghost") && models.objects) jobs.push("objects");
   if (any("faces", "distance", "blur") && models.faces) jobs.push("faces");
-  if (any("hands", "objects", "draw", "fingers") && models.hands) jobs.push("hands");
+  if (any("hands", "objects", "draw", "fingers", "ar", "thoughts") && models.hands) jobs.push("hands");
   if (any("pose", "workout", "posture") && models.pose) jobs.push("pose");
   if (active.has("seg") && models.seg) jobs.push("seg");
   if ((active.has("mesh") || active.has("expr") || active.has("gaze") || active.has("pulse")) && models.mesh) jobs.push("mesh");
@@ -837,7 +1191,7 @@ function runOneModel(t) {
     if (frameNo % 3 === 0 || faceCache.length !== R.faces.length)
       faceCache = R.faces.map(d => Object.keys(known).length ? whoIs(faceEmbedding(d.boundingBox)) : ["Face", 0]);
   }
-  if (job === "hands") { R.hands = models.hands.recognizeForVideo(video, t); if (active.has("objects") && turn % 2 === 0) heldObjects(R.hands, true); }
+  if (job === "hands") { R.hands = models.hands.recognizeForVideo(video, t); if ((active.has("objects") || active.has("thoughts")) && turn % 2 === 0 && models.held) heldObjects(R.hands, true); }
   if (job === "pose") R.pose = models.pose.detectForVideo(video, t);
   if (job === "seg") { const r = models.seg.segmentForVideo(video, t); const m = r.confidenceMasks?.[0]; if (m) setSegMask(m.getAsFloat32Array(), m.width, m.height); r.close?.(); }
   if (job === "mesh") R.mesh = models.mesh.detectForVideo(video, t);
@@ -916,7 +1270,7 @@ function drawResults() {
       if (!["Unknown", "Face"].includes(name) && Date.now() - (greeted[name] || 0) > 120000) { greeted[name] = Date.now(); say(`Hello, ${name}`); } }
     drawTracks(tracks.faces, now, it => it.text === "Unknown" ? "#ff8c42" : "#3ddc84");
   } else tracks.faces = [];
-  if ((active.has("hands") || active.has("draw") || active.has("fingers")) && R.hands) {
+  if ((active.has("hands") || active.has("draw") || active.has("fingers") || active.has("ar") || active.has("thoughts")) && R.hands) {
     const r = R.hands; seen.gestures = []; const showHands = active.has("hands");
     if (r !== lastHandRes) { lastHandRes = r;
       handSmooth = r.landmarks.map((lm, i) => { const prev = handSmooth[i];
@@ -1005,6 +1359,9 @@ function sceneText() {
   if (active.has("color") && X.color) parts.push("Colour at the centre crosshair: " + X.color);
   if (active.has("people")) parts.push(`People in view: ${X.people ?? 0}`);
   if (active.has("pulse") && X.pulse) parts.push(`Estimated heart rate: ${X.pulse} BPM`);
+  if (active.has("ghost") && X.ghost) parts.push("Ghost hunter (a for-fun motion/light anomaly meter) last flagged: " + X.ghost);
+  if (active.has("thoughts") && X.prediction) parts.push("My prediction of what they're doing: " + X.prediction);
+  if (active.has("ar") && AR.calc) parts.push("AR calculator display: " + AR.calc);
   return parts.join(". ") || "No detectors are switched on.";
 }
 const SYSTEM = "You are JARVIS, Christian's witty, warm and genuinely helpful British AI assistant, talking with him out loud. " +
@@ -1532,6 +1889,8 @@ $("voice").onclick = () => { voiceOn = !voiceOn; $("voice").classList.toggle("on
 $("snap").onclick = () => { const a = document.createElement("a"); a.download = `vision-${Date.now()}.png`; a.href = out.toDataURL(); a.click(); };
 document.addEventListener("keydown", e => {
   if (e.target.tagName === "INPUT") return;
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && active.has("draw")) { X.strokes.pop(); drawing = null; e.preventDefault(); return; }
+  if (e.metaKey || e.ctrlKey) return;
   const m = MODES.find(m => m[2].toLowerCase() === e.key.toLowerCase());
   if (m) toggle(m[0]);
   else if (e.key === "r") register(); else if (e.key === "t") $("talk").click();
