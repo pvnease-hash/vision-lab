@@ -10,7 +10,10 @@ round panels (160x160) sharing one SPI bus with dual chip-select, on an
 |---|---|
 | `platformio.ini` | pioarduino / Arduino framework, `esp32-c6-devkitc-1` |
 | `include/board_pins.h` | **the only** place hardware pins are defined |
-| `src/main.cpp` | dual-GC9D01 brightness self-test (white/black) |
+| `src/selftest.cpp` | dual-GC9D01 brightness self-test (white/black), `env:jarvis_eyes_c6` |
+| `src/eyes.cpp` | animated eyes: iris texture, blinks, saccades, `env:jarvis_eyes_anim` |
+| `.claude/hooks/bootstrap-pio.sh` | makes `pio run` work in a fresh cloud container |
+| `include/board_pins.h` placeholder pins | raise a `#warning` until metered |
 | `index.html` | unrelated page, pre-existing |
 
 ## Compile check
@@ -19,7 +22,22 @@ round panels (160x160) sharing one SPI bus with dual chip-select, on an
 pio run
 ```
 
-Current: **RAM 4.8% (15,572 B of 320 KB), Flash 25%**.
+Both environments build:
+
+| Env | Static RAM | Flash |
+|---|---|---|
+| `jarvis_eyes_c6` (self-test) | 4.8% (15,572 B) | 25.0% |
+| `jarvis_eyes_anim` (animated) | 4.8% (15,604 B) | 25.6% |
+
+The animated build also allocates **one** 160x160 RGB565 framebuffer on the heap
+at runtime: 51,200 B. Two canvases (102 KB) would be a bad trade on a 320 KB
+part for no benefit, so there is one buffer - draw the left eye, push it to the
+left panel, redraw for the right eye, push it to the right panel. Both eyes
+still update every frame. The allocation is checked and logged, because a silent
+canvas failure is indistinguishable from a wiring fault.
+
+A new cloud session runs `.claude/hooks/bootstrap-pio.sh` on start, so `pio run`
+works without the manual steps at the bottom of this file.
 
 Compiling costs nothing and needs no hardware, so it is the first check for
 every change. Flashing is never automatic and never done without explicit
